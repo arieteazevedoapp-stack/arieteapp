@@ -319,6 +319,15 @@ async function fileToBase64(file){
   });
 }
 
+// Sempre devolve uma string legível, seja o erro uma string, um objeto {message}, ou algo inesperado.
+function extractErrorMessage(data, status){
+  if (!data) return `Erro ${status} sem detalhes.`;
+  if (typeof data.error === 'string') return data.error;
+  if (data.error && typeof data.error === 'object' && data.error.message) return data.error.message;
+  try{ return `Erro ${status}: ` + JSON.stringify(data); }
+  catch(e){ return `Erro ${status} não identificado.`; }
+}
+
 // Reduz o tamanho da foto até caber com folga num documento do Firestore (limite de 1MB por documento).
 // A imagem vai ser guardada como base64 dentro do próprio documento, então o alvo é conservador (~550KB).
 async function compressImage(file, maxWidth=1400, quality=0.8){
@@ -361,9 +370,11 @@ async function callGeminiExtract(file, promptText){
     headers: { 'Content-Type':'application/json', 'Authorization': 'Bearer ' + idToken },
     body: JSON.stringify({ base64, mimeType, prompt: promptText })
   });
-  const data = await resp.json();
-  if (!resp.ok) throw new Error(data.error || 'Erro ao chamar /api/gemini');
-  if (data.error) throw new Error(data.error.message || 'Erro na API do Gemini');
+  let data;
+  try{ data = await resp.json(); }
+  catch(e){ throw new Error(`Servidor respondeu ${resp.status} sem corpo legível (provável falha na função do Vercel — confira os logs em Vercel → Functions).`); }
+  if (!resp.ok) throw new Error(extractErrorMessage(data, resp.status));
+  if (data.error) throw new Error(extractErrorMessage(data, resp.status));
   let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
   text = text.replace(/```json/g,'').replace(/```/g,'').trim();
   try{ return JSON.parse(text); }
