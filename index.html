@@ -331,13 +331,16 @@ function extractErrorMessage(data, status){
   catch(e){ return `Erro ${status} não identificado.`; }
 }
 
-// Reduz o tamanho da foto até caber com folga num documento do Firestore (limite de 1MB por documento).
-// A imagem vai ser guardada como base64 dentro do próprio documento, então o alvo é conservador (~550KB).
-async function compressImage(file, maxWidth=1400, quality=0.8){
+// Só reduz a foto quando ela realmente não cabe no limite de 1MB por documento do Firestore.
+// Se o arquivo original já for pequeno o suficiente, usa ele sem nenhuma perda de qualidade.
+async function compressImage(file, maxWidth=2200, quality=0.92){
   if (!file.type.startsWith('image/')) return file; // não mexe em PDF
-  const TARGET_BYTES = 550 * 1024;
+  const TARGET_BYTES = 650 * 1024; // deixa folga segura sob o 1MB do Firestore depois da codificação em base64
+
+  if (file.size <= TARGET_BYTES) return file; // já cabe — não recomprime, preserva a qualidade original
+
   let currentQuality = quality, currentWidth = maxWidth, blob;
-  for (let attempt=0; attempt<6; attempt++){
+  for (let attempt=0; attempt<7; attempt++){
     const bitmap = await createImageBitmap(file);
     const scale = Math.min(1, currentWidth / bitmap.width);
     const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale);
@@ -345,9 +348,9 @@ async function compressImage(file, maxWidth=1400, quality=0.8){
     canvas.width = w; canvas.height = h;
     canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
     blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', currentQuality));
-    if (blob.size <= TARGET_BYTES || attempt === 5) break;
-    currentQuality = Math.max(0.35, currentQuality - 0.15);
-    currentWidth = Math.max(700, currentWidth - 200);
+    if (blob.size <= TARGET_BYTES || attempt === 6) break;
+    currentQuality = Math.max(0.4, currentQuality - 0.1);
+    currentWidth = Math.max(900, currentWidth - 250);
   }
   return new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' });
 }
@@ -795,7 +798,7 @@ document.getElementById('btnAutoConciliar').addEventListener('click', async ()=>
   for (const c of compPend){
     const candidatos = transPend.filter(t=>
       t.status==='pendente' &&
-      Math.abs(t.valor - c.valor) < 0.01 &&
+      Math.abs(Math.abs(t.valor) - Math.abs(c.valor)) < 0.01 && // compara em módulo: gasto é negativo no extrato, comprovante é sempre positivo
       Math.abs(new Date(t.data) - new Date(c.data)) <= 5*24*3600*1000
     );
     if (candidatos.length===1){
