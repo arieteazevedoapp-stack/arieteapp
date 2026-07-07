@@ -62,7 +62,8 @@ module.exports = async (req, res) => {
   }
 
   // 3) Repassa pro Gemini usando a chave que só o servidor conhece.
-  // Se responder 503 (sobrecarregado), tenta de novo com espera curta; se persistir, troca de modelo.
+  // Estratégia: 429/503 no modelo principal -> tenta o alternativo na hora (tem cota própria, separada);
+  // só espera de verdade se os dois estiverem no limite.
   const body = JSON.stringify({
     contents: [{
       parts: [
@@ -76,7 +77,7 @@ module.exports = async (req, res) => {
   const espera = (ms) => new Promise(r => setTimeout(r, ms));
 
   async function chamarGemini(modelo){
-    return fetch(
+    const resp = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent`,
       {
         method: 'POST',
@@ -87,6 +88,8 @@ module.exports = async (req, res) => {
         body,
       }
     );
+    const data = await resp.json();
+    return { status: resp.status, data };
   }
 
   // Extrai quantos segundos esperar a partir do erro 429 do Gemini (vem no campo "details" ou no texto da mensagem).
@@ -104,33 +107,20 @@ module.exports = async (req, res) => {
   }
 
   try {
-    let ultimaResposta, ultimoStatus;
+    // 1ª tentativa: modelo principal
+    let r1 = await chamarGemini(GEMINI_MODEL_PRIMARY);
+    if (r1.status !== 429 && r1.status !== 503) return res.status(r1.status).json(r1.data);
 
-    // até 2 tentativas no modelo principal
-    for (let tentativa = 0; tentativa < 2; tentativa++){
-      const geminiResp = await chamarGemini(GEMINI_MODEL_PRIMARY);
-      const data = await geminiResp.json();
+    // 2ª tentativa: modelo alternativo, na hora — tem cota própria, separada da do principal
+    let r2 = await chamarGemini(GEMINI_MODEL_FALLBACK);
+    if (r2.status !== 429 && r2.status !== 503) return res.status(r2.status).json(r2.data);
 
-      if (geminiResp.status === 429){
-        // Limite de requisições por minuto do plano gratuito — espera o tempo indicado e tenta de novo (só 1 vez).
-        const segundos = Math.min(extrairEsperaSegundos(data) + 1, 55);
-        await espera(segundos * 1000);
-        const retryResp = await chamarGemini(GEMINI_MODEL_PRIMARY);
-        const retryData = await retryResp.json();
-        return res.status(retryResp.status).json(retryData);
-      }
-
-      if (geminiResp.status !== 503) return res.status(geminiResp.status).json(data);
-      ultimaResposta = data; ultimoStatus = geminiResp.status;
-      await espera(1500 * (tentativa + 1)); // 1.5s, depois 3s
-    }
-
-    // se continuou sobrecarregado, tenta 1 vez no modelo alternativo
-    const geminiRespFallback = await chamarGemini(GEMINI_MODEL_FALLBACK);
-    const dataFallback = await geminiRespFallback.json();
-    if (geminiRespFallback.status !== 503) return res.status(geminiRespFallback.status).json(dataFallback);
-
-    return res.status(503).json(dataFallback || ultimaResposta);
+    // Se os dois modelos estão no limite, agora sim espera o tempo pedido e tenta o principal mais uma vez
+    const base = (r1.status === 429) ? r1.data : r2.data;
+    const segundos = Math.min(extrairEsperaSegundos(base) + 1, 55);
+    await espera(segundos * 1000);
+    let r3 = await chamarGemini(GEMINI_MODEL_PRIMARY);
+    return res.status(r3.status).json(r3.data);
   } catch (e) {
     return res.status(502).json({ error: 'Falha ao chamar o Gemini: ' + e.message });
   }
