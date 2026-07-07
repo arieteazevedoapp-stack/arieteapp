@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prestação de Contas — Curatela</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+
+<!-- SheetJS (export xlsx) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<!-- JSZip (baixar comprovantes em lote) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+<style>
+  :root{
+    --ink:#1B2A4A;
+    --ink-soft:#4A5A7A;
+    --paper:#FAF7F0;
+    --paper-line:#E4DFD2;
+    --ok:#3F6B4F;
+    --ok-bg:#E7EFE9;
+    --pend:#B3792E;
+    --pend-bg:#F6ECDC;
+    --miss:#A6423A;
+    --miss-bg:#F5E5E2;
+    --card:#FFFFFF;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:'Inter',sans-serif; -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3{ font-family:'Lora',serif; font-weight:600; margin:0 0 4px; }
+  .mono{ font-family:'JetBrains Mono',monospace; }
+  header{
+    padding:20px 16px 14px; border-bottom:2px solid var(--ink);
+    display:flex; align-items:baseline; justify-content:space-between; gap:8px; flex-wrap:wrap;
+  }
+  header h1{ font-size:1.25rem; }
+  header .sub{ font-size:.78rem; color:var(--ink-soft); }
+  nav{
+    display:flex; gap:2px; overflow-x:auto; background:var(--card);
+    border-bottom:1px solid var(--paper-line); position:sticky; top:0; z-index:5;
+  }
+  nav button{
+    flex:1 0 auto; padding:12px 10px; border:none; background:none; cursor:pointer;
+    font-family:'Inter',sans-serif; font-size:.8rem; font-weight:500; color:var(--ink-soft);
+    border-bottom:3px solid transparent; white-space:nowrap;
+  }
+  nav button.active{ color:var(--ink); border-bottom-color:var(--ink); font-weight:600; }
+  main{ padding:16px; max-width:900px; margin:0 auto; padding-bottom:80px; }
+  .screen{ display:none; }
+  .screen.active{ display:block; }
+  .card{
+    background:var(--card); border:1px solid var(--paper-line); border-radius:6px;
+    padding:16px; margin-bottom:14px;
+  }
+  .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  label{ font-size:.78rem; font-weight:600; color:var(--ink-soft); display:block; margin-bottom:4px; }
+  input,select,textarea{
+    font-family:'Inter',sans-serif; font-size:.88rem; padding:9px 10px;
+    border:1px solid var(--paper-line); border-radius:4px; background:#fff; color:var(--ink);
+  }
+  textarea{ width:100%; resize:vertical; min-height:60px; }
+  button.btn{
+    font-family:'Inter',sans-serif; font-weight:600; font-size:.82rem;
+    padding:10px 16px; border-radius:4px; border:1.5px solid var(--ink); background:var(--ink);
+    color:var(--paper); cursor:pointer;
+  }
+  button.btn.secondary{ background:transparent; color:var(--ink); }
+  button.btn.ghost{ border-color:var(--paper-line); color:var(--ink-soft); background:transparent; }
+  button.btn:disabled{ opacity:.45; cursor:not-allowed; }
+  table{ width:100%; border-collapse:collapse; font-size:.82rem; }
+  th{ text-align:left; font-size:.7rem; text-transform:uppercase; letter-spacing:.04em;
+      color:var(--ink-soft); border-bottom:2px solid var(--ink); padding:6px 8px; }
+  td{ padding:7px 8px; border-bottom:1px solid var(--paper-line); vertical-align:top; }
+  tr.selected{ background:#F0EEE4; }
+  .tag{ display:inline-block; padding:2px 8px; border-radius:20px; font-size:.7rem; font-weight:600; }
+  .tag.ok{ background:var(--ok-bg); color:var(--ok); }
+  .tag.pend{ background:var(--pend-bg); color:var(--pend); }
+  .tag.miss{ background:var(--miss-bg); color:var(--miss); }
+  .stat{ text-align:center; padding:10px; }
+  .stat .n{ font-family:'JetBrains Mono',monospace; font-size:1.5rem; font-weight:600; }
+  .stat .l{ font-size:.72rem; color:var(--ink-soft); }
+  .empty{ text-align:center; padding:30px 10px; color:var(--ink-soft); font-size:.85rem; }
+  .thumb{ width:44px; height:44px; object-fit:cover; border-radius:4px; border:1px solid var(--paper-line); cursor:pointer; }
+  .col2{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:640px){ .col2{ grid-template-columns:1fr; } }
+  .hint{ font-size:.76rem; color:var(--ink-soft); margin-top:6px; }
+  .config-warn{ background:var(--miss-bg); color:var(--miss); padding:10px 14px; border-radius:6px; font-size:.82rem; margin-bottom:14px; }
+</style>
+</head>
+<body>
+
+<!-- LOGIN GATE -->
+<div id="loginGate" style="display:none; min-height:100vh; align-items:center; justify-content:center; flex-direction:column; padding:20px;">
+  <div class="card" style="max-width:360px; width:100%;">
+    <h2 style="margin-bottom:2px;">Prestação de Contas</h2>
+    <div class="hint" style="margin-bottom:14px;">Acesso restrito — entre com seu e-mail e senha.</div>
+    <label>E-mail</label>
+    <input type="email" id="loginEmail" style="width:100%; margin-bottom:10px;">
+    <label>Senha</label>
+    <input type="password" id="loginPassword" style="width:100%; margin-bottom:14px;">
+    <div class="row">
+      <button class="btn" id="btnLogin">Entrar</button>
+      <button class="btn ghost" id="btnSignup">Criar conta</button>
+    </div>
+    <div id="loginStatus" class="hint" style="margin-top:10px;"></div>
+  </div>
+</div>
+
+<div id="appContent" style="display:block;">
+
+<header>
+  <div>
+    <h1>Prestação de Contas</h1>
+    <div class="sub">Curatela — conciliação de extrato x comprovantes</div>
+  </div>
+  <div class="row">
+    <select id="mesSelect"></select>
+    <button class="btn ghost" id="btnLogout" style="padding:6px 10px; font-size:.72rem;">Sair</button>
+  </div>
+</header>
+
+<nav>
+  <button data-screen="config" class="active">Config</button>
+  <button data-screen="importar">Importar extrato</button>
+  <button data-screen="comprovantes">Comprovantes</button>
+  <button data-screen="conciliacao">Conciliação</button>
+  <button data-screen="dashboard">Dashboard</button>
+  <button data-screen="exportar">Exportar</button>
+</nav>
+
+<main>
+
+
+  <!-- CONFIG -->
+  <section class="screen active" id="screen-config">
+    <div class="card">
+      <h2>Configuração do Firebase</h2>
+      <p class="hint">Cole aqui a config do seu projeto Firebase (Firestore + Storage + <strong>Authentication com e-mail/senha habilitado</strong>). Isso fica salvo só no seu navegador (localStorage) — não sobe pra lugar nenhum.</p>
+      <textarea id="fbConfigInput" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn" id="btnSaveConfig">Salvar e conectar</button>
+        <span id="configStatus" class="hint"></span>
+      </div>
+    </div>
+    <div class="card config-warn" style="color:var(--miss); background:var(--miss-bg);">
+      <strong>Importante — regras de segurança:</strong> pra que o login realmente proteja os dados, você precisa colar isto no Firebase Console, em <em>Firestore Database → Regras</em>:
+      <pre style="white-space:pre-wrap; font-size:.72rem; background:#fff; padding:8px; border-radius:4px; margin-top:6px;">rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}</pre>
+      E em <em>Storage → Regras</em>:
+      <pre style="white-space:pre-wrap; font-size:.72rem; background:#fff; padding:8px; border-radius:4px; margin-top:6px;">rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}</pre>
+      Sem isso, o login aparece na tela mas os dados continuam abertos pra qualquer um com a config do projeto.
+    </div>
+    <div class="card">
+      <h2>Chave do Gemini</h2>
+      <p class="hint">A chave do Gemini agora fica só no servidor (variável de ambiente no Vercel) — o app nunca vê nem envia essa chave. Ele chama <code>/api/gemini</code>, que confere seu login e repassa a chamada. Não precisa configurar nada aqui.</p>
+    </div>
+    <div class="card">
+      <h3>Como funciona</h3>
+      <ol class="hint" style="padding-left:18px;">
+        <li>Cada pessoa autorizada cria sua conta (e-mail/senha) na tela de login, uma única vez.</li>
+        <li>Importe o extrato em PDF do mês — o Gemini lê o PDF e extrai as transações (revise antes de confirmar).</li>
+        <li>Tire ou suba fotos dos comprovantes — pode ter mais de um comprovante por foto. O Gemini identifica cada um; você revisa e confirma antes de salvar.</li>
+        <li>O sistema tenta conciliar automaticamente por valor + data. O que não bater, fica pendente.</li>
+        <li>Na aba Conciliação, você vincula manualmente o que sobrou, ou justifica a ausência de comprovante.</li>
+        <li>Em Exportar, você gera a planilha do mês + baixa os comprovantes em lote pra entregar ao juiz.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- IMPORTAR EXTRATO -->
+  <section class="screen" id="screen-importar">
+    <div class="card">
+      <h2>Importar extrato (PDF)</h2>
+      <div class="row">
+        <input type="file" id="pdfInput" accept="application/pdf">
+        <button class="btn" id="btnParsePdf">Extrair transações (Gemini)</button>
+      </div>
+      <p class="hint" id="parseHint">O Gemini lê o PDF diretamente — mas <strong>revise a tabela abaixo antes de confirmar</strong>. Você pode editar, apagar ou adicionar linhas manualmente.</p>
+    </div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between;">
+        <h3>Prévia — <span id="previewMes">-</span></h3>
+        <button class="btn ghost" id="btnAddRow">+ linha manual</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table id="previewTable">
+          <thead><tr><th>Data</th><th>Descrição</th><th>Valor (R$)</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <button class="btn" id="btnConfirmImport">Confirmar e salvar transações</button>
+        <span id="importStatus" class="hint"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMPROVANTES -->
+  <section class="screen" id="screen-comprovantes">
+    <div class="card">
+      <h2>Novos comprovantes</h2>
+      <p class="hint">Pode selecionar várias fotos de uma vez, e cada foto pode conter mais de um comprovante — o Gemini identifica cada um separadamente.</p>
+      <input type="file" id="comprovanteInput" accept="image/*" multiple capture="environment">
+      <div class="hint" id="ocrStatus"></div>
+    </div>
+    <div class="card" id="cardRevisaoComp" style="display:none;">
+      <h3>Revisar antes de salvar</h3>
+      <p class="hint">Confira data, valor e descrição de cada comprovante encontrado. Apague o que não for válido.</p>
+      <div style="overflow-x:auto;">
+        <table id="compReviewTable">
+          <thead><tr><th></th><th>Data</th><th>Valor (R$)</th><th>Descrição</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <button class="btn" id="btnSaveAllComp">Salvar todos</button>
+        <span id="compSaveStatus" class="hint"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Comprovantes do mês</h3>
+      <div id="listaComprovantes"><div class="empty">Nenhum comprovante ainda.</div></div>
+    </div>
+  </section>
+
+  <!-- CONCILIAÇÃO -->
+  <section class="screen" id="screen-conciliacao">
+    <div class="card">
+      <div class="row" style="justify-content:space-between;">
+        <h2>Conciliação pendente</h2>
+        <button class="btn secondary" id="btnAutoConciliar">Rodar conciliação automática</button>
+      </div>
+      <p class="hint">Selecione uma transação e um comprovante e clique em vincular. Ou marque a transação como "sem comprovante" com uma justificativa.</p>
+    </div>
+    <div class="col2">
+      <div class="card">
+        <h3>Transações sem vínculo</h3>
+        <div id="listaTransPendentes"><div class="empty">Nada pendente.</div></div>
+      </div>
+      <div class="card">
+        <h3>Comprovantes sem vínculo</h3>
+        <div id="listaCompPendentes"><div class="empty">Nada pendente.</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row">
+        <button class="btn" id="btnVincular" disabled>Vincular selecionados</button>
+        <button class="btn ghost" id="btnJustificar" disabled>Marcar transação sem comprovante (justificar)</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section class="screen" id="screen-dashboard">
+    <div class="card">
+      <h2>Resumo do mês</h2>
+      <div class="row" id="statsRow"></div>
+    </div>
+    <div class="card">
+      <h3>Todas as transações do mês</h3>
+      <div style="overflow-x:auto;">
+        <table id="dashTable">
+          <thead><tr><th>Data</th><th>Descrição</th><th>Valor</th><th>Status</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- EXPORTAR -->
+  <section class="screen" id="screen-exportar">
+    <div class="card">
+      <h2>Exportar para o juiz</h2>
+      <p class="hint">Gera a planilha contábil do mês selecionado no topo da página, e o pacote de comprovantes correspondente.</p>
+      <div class="row">
+        <button class="btn" id="btnExportXlsx">Baixar planilha (.xlsx)</button>
+        <button class="btn secondary" id="btnExportZip">Baixar comprovantes (.zip)</button>
+      </div>
+      <span id="exportStatus" class="hint"></span>
+    </div>
+  </section>
+
+</main>
+
+</div><!-- /appContent -->
+
+<script>
+/* ===================== ESTADO / FIREBASE ===================== */
+let db = null, storage = null, auth = null, firebaseReady = false;
+let mesAtual = mesAtualDefault();
+let transacoesCache = [];
+let comprovantesCache = [];
+let selectedTransId = null;
+let selectedCompId = null;
+let previewRows = []; // {data, descricao, valor}
+let compFiles = [];   // File objects selecionados na última leva
+let compReview = [];  // {fileIdx, data, valor, descricao}
+
+async function fileToBase64(file){
+  return new Promise((resolve, reject)=>{
+    const r = new FileReader();
+    r.onload = ()=> resolve(r.result.split(',')[1]);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+// Reduz o tamanho da foto antes de enviar (economiza banda e fica dentro do limite do Vercel).
+async function compressImage(file, maxWidth=1600, quality=0.85){
+  if (!file.type.startsWith('image/')) return file; // não mexe em PDF
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxWidth / bitmap.width);
+  const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+  const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
+  return new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' });
+}
+
+// Chama a função serverless /api/gemini (a chave real fica só no Vercel, nunca no navegador).
+async function callGeminiExtract(file, promptText){
+  if (!auth || !auth.currentUser) throw new Error('Você precisa estar logado.');
+  const base64 = await fileToBase64(file);
+  const mimeType = file.type || 'application/octet-stream';
+  const idToken = await auth.currentUser.getIdToken();
+  const resp = await fetch('/api/gemini', {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json', 'Authorization': 'Bearer ' + idToken },
+    body: JSON.stringify({ base64, mimeType, prompt: promptText })
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || 'Erro ao chamar /api/gemini');
+  if (data.error) throw new Error(data.error.message || 'Erro na API do Gemini');
+  let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+  text = text.replace(/```json/g,'').replace(/```/g,'').trim();
+  try{ return JSON.parse(text); }
+  catch(e){ throw new Error('Resposta do Gemini não veio em JSON válido.'); }
+}
+
+function mesAtualDefault(){
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+}
+
+function fmtMoeda(v){
+  return (v<0?'-':'') + 'R$ ' + Math.abs(v).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function parseMoeda(str){
+  if (typeof str === 'number') return str;
+  if (!str) return NaN;
+  let s = str.replace(/[R$\s]/g,'').replace(/\./g,'').replace(',','.');
+  return parseFloat(s);
+}
+function toISODate(d){ // dd/mm/yyyy -> yyyy-mm-dd
+  const m = d.match(/(\d{2})\/(\d{2})\/(\d{2,4})/);
+  if (!m) return null;
+  let yyyy = m[3].length===2 ? '20'+m[3] : m[3];
+  return `${yyyy}-${m[2]}-${m[1]}`;
+}
+function mesFromISO(iso){ return iso ? iso.slice(0,7) : null; }
+
+/* ===================== NAV ===================== */
+document.querySelectorAll('nav button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('screen-'+btn.dataset.screen).classList.add('active');
+    if (btn.dataset.screen==='comprovantes') renderComprovantes();
+    if (btn.dataset.screen==='conciliacao') renderConciliacao();
+    if (btn.dataset.screen==='dashboard') renderDashboard();
+  });
+});
+
+/* mes selector */
+function populateMesSelect(){
+  const sel = document.getElementById('mesSelect');
+  sel.innerHTML='';
+  const d = new Date();
+  for (let i=-11;i<=1;i++){
+    const dt = new Date(d.getFullYear(), d.getMonth()+i, 1);
+    const val = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    const opt = document.createElement('option');
+    opt.value = val;
+    opt.textContent = dt.toLocaleDateString('pt-BR',{month:'long', year:'numeric'});
+    if (val===mesAtual) opt.selected=true;
+    sel.appendChild(opt);
+  }
+  sel.addEventListener('change', ()=>{
+    mesAtual = sel.value;
+    document.getElementById('previewMes').textContent = mesAtual;
+    loadMesData();
+  });
+}
+populateMesSelect();
+document.getElementById('previewMes').textContent = mesAtual;
+
+/* ===================== FIREBASE CONFIG + AUTH ===================== */
+function initFirebaseFromConfig(cfg){
+  try{
+    if (!firebase.apps.length) firebase.initializeApp(cfg);
+    db = firebase.firestore();
+    storage = firebase.storage();
+    auth = firebase.auth();
+    firebaseReady = true;
+    document.getElementById('configStatus').textContent = '✓ Conectado.';
+    setupAuthListener();
+  }catch(e){
+    document.getElementById('configStatus').textContent = 'Erro: ' + e.message;
+  }
+}
+document.getElementById('btnSaveConfig').addEventListener('click', ()=>{
+  const raw = document.getElementById('fbConfigInput').value.trim();
+  try{
+    const cfg = JSON.parse(raw);
+    localStorage.setItem('fbConfig', JSON.stringify(cfg));
+    initFirebaseFromConfig(cfg);
+  }catch(e){
+    document.getElementById('configStatus').textContent = 'JSON inválido.';
+  }
+});
+(function tryLoadSavedConfig(){
+  const saved = localStorage.getItem('fbConfig');
+  if (saved){
+    document.getElementById('fbConfigInput').value = saved;
+    initFirebaseFromConfig(JSON.parse(saved));
+  }
+})();
+
+/* --- Auth: exige login antes de mostrar o app --- */
+function setupAuthListener(){
+  auth.onAuthStateChanged(async (user)=>{
+    if (user){
+      document.getElementById('loginGate').style.display = 'none';
+      document.getElementById('appContent').style.display = 'block';
+      loadMesData();
+    } else {
+      document.getElementById('loginGate').style.display = 'flex';
+      document.getElementById('appContent').style.display = 'none';
+    }
+  });
+}
+document.getElementById('btnLogin').addEventListener('click', async ()=>{
+  const email = document.getElementById('loginEmail').value.trim();
+  const senha = document.getElementById('loginPassword').value;
+  document.getElementById('loginStatus').textContent = 'Entrando...';
+  try{
+    await auth.signInWithEmailAndPassword(email, senha);
+  }catch(e){
+    document.getElementById('loginStatus').textContent = traduzErroAuth(e);
+  }
+});
+document.getElementById('btnSignup').addEventListener('click', async ()=>{
+  const email = document.getElementById('loginEmail').value.trim();
+  const senha = document.getElementById('loginPassword').value;
+  if (!email || senha.length < 6) {
+    document.getElementById('loginStatus').textContent = 'Preencha e-mail e senha (mín. 6 caracteres).';
+    return;
+  }
+  document.getElementById('loginStatus').textContent = 'Criando conta...';
+  try{
+    await auth.createUserWithEmailAndPassword(email, senha);
+  }catch(e){
+    document.getElementById('loginStatus').textContent = traduzErroAuth(e);
+  }
+});
+document.getElementById('btnLogout').addEventListener('click', ()=> auth.signOut());
+function traduzErroAuth(e){
+  const map = {
+    'auth/invalid-email':'E-mail inválido.',
+    'auth/user-not-found':'Usuário não encontrado.',
+    'auth/wrong-password':'Senha incorreta.',
+    'auth/email-already-in-use':'Esse e-mail já tem conta — clique em Entrar.',
+    'auth/weak-password':'Senha muito curta (mín. 6 caracteres).',
+    'auth/invalid-credential':'E-mail ou senha incorretos.'
+  };
+  return map[e.code] || ('Erro: ' + e.message);
+}
+
+/* ===================== IMPORTAR EXTRATO (PDF via Gemini) ===================== */
+const PROMPT_EXTRATO = `Você recebe um extrato bancário em PDF. Extraia TODAS as transações (não inclua saldo anterior, saldo final, cabeçalho ou rodapé).
+Retorne SOMENTE um array JSON, sem markdown, neste formato exato:
+[{"data":"dd/mm/aaaa","descricao":"texto curto da transação","valor": numero}]
+Regras: valor negativo para saídas/débitos/pagamentos, valor positivo para entradas/créditos/depósitos. Datas sempre no formato dd/mm/aaaa.`;
+
+document.getElementById('btnParsePdf').addEventListener('click', async ()=>{
+  const file = document.getElementById('pdfInput').files[0];
+  if (!file) return alert('Escolha um arquivo PDF.');
+  document.getElementById('importStatus').textContent = 'Lendo PDF com o Gemini...';
+  try{
+    const result = await callGeminiExtract(file, PROMPT_EXTRATO);
+    previewRows = (result||[]).map(r=>({
+      data: toISODate(r.data) || '',
+      descricao: r.descricao || '(sem descrição)',
+      valor: typeof r.valor === 'number' ? r.valor : parseMoeda(String(r.valor))
+    }));
+    renderPreviewTable();
+    document.getElementById('importStatus').textContent =
+      previewRows.length ? `${previewRows.length} transações encontradas — revise antes de confirmar.` : 'Nenhuma transação reconhecida. Tente novamente ou adicione manualmente.';
+  }catch(e){
+    document.getElementById('importStatus').textContent = 'Erro: ' + e.message;
+  }
+});
+
+function renderPreviewTable(){
+  const tbody = document.querySelector('#previewTable tbody');
+  tbody.innerHTML = '';
+  previewRows.forEach((r, idx)=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="date" value="${r.data||''}" data-idx="${idx}" data-field="data" style="width:130px;"></td>
+      <td><input type="text" value="${r.descricao}" data-idx="${idx}" data-field="descricao" style="width:100%;"></td>
+      <td><input type="text" class="mono" value="${r.valor}" data-idx="${idx}" data-field="valor" style="width:100px;"></td>
+      <td><button class="btn ghost" data-del="${idx}" style="padding:4px 8px;">×</button></td>`;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll('input').forEach(inp=>{
+    inp.addEventListener('input', e=>{
+      const idx = +e.target.dataset.idx, field = e.target.dataset.field;
+      previewRows[idx][field] = field==='valor' ? parseFloat(e.target.value) : e.target.value;
+    });
+  });
+  tbody.querySelectorAll('[data-del]').forEach(b=>{
+    b.addEventListener('click', ()=>{ previewRows.splice(+b.dataset.del,1); renderPreviewTable(); });
+  });
+}
+
+document.getElementById('btnAddRow').addEventListener('click', ()=>{
+  previewRows.push({data:'', descricao:'', valor:0});
+  renderPreviewTable();
+});
+
+document.getElementById('btnConfirmImport').addEventListener('click', async ()=>{
+  if (!firebaseReady) return alert('Configure o Firebase primeiro.');
+  if (!previewRows.length) return alert('Nada para importar.');
+  document.getElementById('importStatus').textContent = 'Salvando...';
+  const batch = db.batch();
+  previewRows.forEach(r=>{
+    if (!r.data || isNaN(r.valor)) return;
+    const ref = db.collection('transacoes').doc();
+    batch.set(ref, {
+      data: r.data, descricao: r.descricao, valor: r.valor,
+      mes: mesFromISO(r.data), status: 'pendente',
+      comprovanteId: null, observacao: '', criadoEm: Date.now()
+    });
+  });
+  await batch.commit();
+  document.getElementById('importStatus').textContent = '✓ Transações salvas.';
+  previewRows = [];
+  renderPreviewTable();
+  loadMesData();
+});
+
+/* ===================== COMPROVANTES (multi-foto via Gemini) ===================== */
+const PROMPT_COMPROVANTE = `Esta imagem pode conter um ou mais comprovantes de pagamento (recibo, nota fiscal, comprovante Pix, comprovante de transferência etc). Identifique CADA comprovante separadamente, mesmo que estejam vários na mesma foto.
+Retorne SOMENTE um array JSON, sem markdown, neste formato exato:
+[{"data":"dd/mm/aaaa","valor": numero, "descricao":"estabelecimento ou motivo do pagamento, texto curto"}]
+Se não conseguir identificar algum campo com confiança, use null nesse campo. Datas sempre no formato dd/mm/aaaa.`;
+
+document.getElementById('comprovanteInput').addEventListener('change', async (e)=>{
+  const rawFiles = Array.from(e.target.files || []);
+  if (!rawFiles.length) return;
+  document.getElementById('ocrStatus').textContent = `Preparando ${rawFiles.length} foto(s)...`;
+  compFiles = await Promise.all(rawFiles.map(f => compressImage(f)));
+  compReview = [];
+  document.getElementById('ocrStatus').textContent = `Lendo ${compFiles.length} foto(s) com o Gemini...`;
+  for (let i=0;i<compFiles.length;i++){
+    try{
+      const result = await callGeminiExtract(compFiles[i], PROMPT_COMPROVANTE);
+      (result||[]).forEach(r=>{
+        compReview.push({
+          fileIdx: i,
+          data: toISODate(r.data) || '',
+          valor: typeof r.valor === 'number' ? r.valor : parseMoeda(String(r.valor||'')),
+          descricao: r.descricao || ''
+        });
+      });
+    }catch(err){
+      compReview.push({ fileIdx:i, data:'', valor:'', descricao:'(falha na leitura — preencha manualmente)' });
+    }
+  }
+  document.getElementById('ocrStatus').textContent =
+    `${compReview.length} comprovante(s) identificado(s) em ${compFiles.length} foto(s) — revise abaixo antes de salvar.`;
+  renderCompReviewTable();
+});
+
+function findDuplicateInfo(item, idx){
+  // Duplicata dentro da própria leva sendo revisada agora
+  for (let j=0;j<compReview.length;j++){
+    if (j===idx) continue;
+    const other = compReview[j];
+    if (other.data && other.data===item.data && !isNaN(other.valor) && Math.abs(other.valor-item.valor)<0.01){
+      return `Igual ao item ${j+1} desta mesma leva`;
+    }
+  }
+  // Duplicata contra comprovantes já salvos no mês
+  const mes = mesFromISO(item.data);
+  const existentes = comprovantesCache.filter(c=>c.mes===mes);
+  for (const c of existentes){
+    if (c.data===item.data && Math.abs(c.valor-item.valor)<0.01){
+      return `Já existe um comprovante salvo com essa data/valor (${c.descricao||'sem descrição'})`;
+    }
+  }
+  return null;
+}
+
+function renderCompReviewTable(){
+  const card = document.getElementById('cardRevisaoComp');
+  const tbody = document.querySelector('#compReviewTable tbody');
+  if (!compReview.length){ card.style.display='none'; return; }
+  card.style.display='block';
+  tbody.innerHTML = '';
+  compReview.forEach((r, idx)=>{
+    const thumbUrl = URL.createObjectURL(compFiles[r.fileIdx]);
+    const dupMsg = findDuplicateInfo(r, idx);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><img src="${thumbUrl}" class="thumb" onclick="window.open('${thumbUrl}','_blank')"></td>
+      <td><input type="date" value="${r.data||''}" data-idx="${idx}" data-field="data" style="width:130px;"></td>
+      <td><input type="text" class="mono" value="${r.valor}" data-idx="${idx}" data-field="valor" style="width:90px;"></td>
+      <td><input type="text" value="${r.descricao}" data-idx="${idx}" data-field="descricao" style="width:100%;">
+          ${dupMsg ? `<div class="hint" style="color:var(--miss); font-weight:600; margin-top:3px;">⚠ possível duplicata — ${dupMsg}</div>` : ''}</td>
+      <td><button class="btn ghost" data-del="${idx}" style="padding:4px 8px;">×</button></td>`;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll('input').forEach(inp=>{
+    inp.addEventListener('input', e=>{
+      const idx = +e.target.dataset.idx, field = e.target.dataset.field;
+      compReview[idx][field] = field==='valor' ? parseFloat(e.target.value) : e.target.value;
+      renderCompReviewTable();
+    });
+  });
+  tbody.querySelectorAll('[data-del]').forEach(b=>{
+    b.addEventListener('click', ()=>{ compReview.splice(+b.dataset.del,1); renderCompReviewTable(); });
+  });
+}
+
+document.getElementById('btnSaveAllComp').addEventListener('click', async ()=>{
+  if (!firebaseReady) return alert('Configure o Firebase primeiro.');
+  if (!compReview.length) return;
+  const duplicatas = compReview.map((r,idx)=>findDuplicateInfo(r,idx)).filter(Boolean);
+  if (duplicatas.length){
+    const ok = confirm(`Encontrei ${duplicatas.length} possível(is) duplicata(s) (mesmo valor e data de algo já existente). Quer salvar assim mesmo?`);
+    if (!ok) return;
+  }
+  document.getElementById('compSaveStatus').textContent = 'Enviando fotos e salvando...';
+  const uploadedUrlByFileIdx = {};
+  for (const r of compReview){
+    if (!r.data || isNaN(r.valor)) continue;
+    if (!(r.fileIdx in uploadedUrlByFileIdx)){
+      const file = compFiles[r.fileIdx];
+      const mes = mesFromISO(r.data);
+      const path = `comprovantes/${mes}/${Date.now()}_${file.name}`;
+      const ref = storage.ref().child(path);
+      await ref.put(file);
+      uploadedUrlByFileIdx[r.fileIdx] = await ref.getDownloadURL();
+    }
+    await db.collection('comprovantes').add({
+      imageUrl: uploadedUrlByFileIdx[r.fileIdx],
+      data: r.data, valor: r.valor, descricao: r.descricao,
+      mes: mesFromISO(r.data), status: 'pendente', transacaoId: null, criadoEm: Date.now()
+    });
+  }
+  document.getElementById('compSaveStatus').textContent = '✓ Comprovantes salvos.';
+  document.getElementById('comprovanteInput').value = '';
+  compFiles = []; compReview = [];
+  document.getElementById('cardRevisaoComp').style.display = 'none';
+  loadMesData();
+});
+
+function renderComprovantes(){
+  const el = document.getElementById('listaComprovantes');
+  const list = comprovantesCache.filter(c=>c.mes===mesAtual);
+  if (!list.length){ el.innerHTML = '<div class="empty">Nenhum comprovante neste mês.</div>'; return; }
+  el.innerHTML = list.map(c=>`
+    <div class="row" style="justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--paper-line);">
+      <div class="row">
+        <img src="${c.imageUrl}" class="thumb" onclick="window.open('${c.imageUrl}','_blank')">
+        <div>
+          <div>${c.descricao||'—'}</div>
+          <div class="hint mono">${c.data} · ${fmtMoeda(c.valor)}</div>
+        </div>
+      </div>
+      <span class="tag ${c.status==='conciliado'?'ok':'pend'}">${c.status}</span>
+    </div>`).join('');
+}
+
+/* ===================== CARREGAR DADOS DO MÊS ===================== */
+async function loadMesData(){
+  if (!firebaseReady) return;
+  const tSnap = await db.collection('transacoes').where('mes','==',mesAtual).get();
+  transacoesCache = tSnap.docs.map(d=>({id:d.id, ...d.data()}));
+  const cSnap = await db.collection('comprovantes').where('mes','==',mesAtual).get();
+  comprovantesCache = cSnap.docs.map(d=>({id:d.id, ...d.data()}));
+  renderComprovantes();
+  renderConciliacao();
+  renderDashboard();
+}
+
+/* ===================== CONCILIAÇÃO ===================== */
+document.getElementById('btnAutoConciliar').addEventListener('click', async ()=>{
+  let count = 0;
+  const transPend = transacoesCache.filter(t=>t.status==='pendente');
+  const compPend = comprovantesCache.filter(c=>c.status==='pendente');
+  for (const c of compPend){
+    const candidatos = transPend.filter(t=>
+      t.status==='pendente' &&
+      Math.abs(t.valor - c.valor) < 0.01 &&
+      Math.abs(new Date(t.data) - new Date(c.data)) <= 5*24*3600*1000
+    );
+    if (candidatos.length===1){
+      const t = candidatos[0];
+      await db.collection('transacoes').doc(t.id).update({status:'conciliado', comprovanteId:c.id});
+      await db.collection('comprovantes').doc(c.id).update({status:'conciliado', transacaoId:t.id});
+      t.status='conciliado'; c.status='conciliado';
+      count++;
+    }
+  }
+  alert(count ? `${count} conciliação(ões) automática(s) feita(s).` : 'Nenhum par encontrado automaticamente.');
+  loadMesData();
+});
+
+function renderConciliacao(){
+  const elT = document.getElementById('listaTransPendentes');
+  const elC = document.getElementById('listaCompPendentes');
+  const transPend = transacoesCache.filter(t=>t.status==='pendente');
+  const compPend = comprovantesCache.filter(c=>c.status==='pendente');
+
+  elT.innerHTML = transPend.length ? transPend.map(t=>`
+    <div class="row ${t.id===selectedTransId?'selected':''}" data-transid="${t.id}"
+         style="justify-content:space-between; padding:8px; cursor:pointer; border-bottom:1px solid var(--paper-line);">
+      <div><div>${t.descricao}</div><div class="hint mono">${t.data}</div></div>
+      <div class="mono">${fmtMoeda(t.valor)}</div>
+    </div>`).join('') : '<div class="empty">Nada pendente.</div>';
+
+  elC.innerHTML = compPend.length ? compPend.map(c=>`
+    <div class="row ${c.id===selectedCompId?'selected':''}" data-compid="${c.id}"
+         style="justify-content:space-between; padding:8px; cursor:pointer; border-bottom:1px solid var(--paper-line);">
+      <div class="row"><img src="${c.imageUrl}" class="thumb">
+        <div><div>${c.descricao||'—'}</div><div class="hint mono">${c.data}</div></div>
+      </div>
+      <div class="mono">${fmtMoeda(c.valor)}</div>
+    </div>`).join('') : '<div class="empty">Nada pendente.</div>';
+
+  elT.querySelectorAll('[data-transid]').forEach(row=>{
+    row.addEventListener('click', ()=>{ selectedTransId = row.dataset.transid; renderConciliacao(); updateVincularBtn(); });
+  });
+  elC.querySelectorAll('[data-compid]').forEach(row=>{
+    row.addEventListener('click', ()=>{ selectedCompId = row.dataset.compid; renderConciliacao(); updateVincularBtn(); });
+  });
+  updateVincularBtn();
+}
+function updateVincularBtn(){
+  document.getElementById('btnVincular').disabled = !(selectedTransId && selectedCompId);
+  document.getElementById('btnJustificar').disabled = !selectedTransId;
+}
+document.getElementById('btnVincular').addEventListener('click', async ()=>{
+  if (!selectedTransId || !selectedCompId) return;
+  await db.collection('transacoes').doc(selectedTransId).update({status:'conciliado', comprovanteId:selectedCompId});
+  await db.collection('comprovantes').doc(selectedCompId).update({status:'conciliado', transacaoId:selectedTransId});
+  selectedTransId = null; selectedCompId = null;
+  loadMesData();
+});
+document.getElementById('btnJustificar').addEventListener('click', async ()=>{
+  if (!selectedTransId) return;
+  const obs = prompt('Justificativa para a ausência de comprovante:');
+  if (obs===null) return;
+  await db.collection('transacoes').doc(selectedTransId).update({status:'sem_comprovante', observacao:obs});
+  selectedTransId = null;
+  loadMesData();
+});
+
+/* ===================== DASHBOARD ===================== */
+function renderDashboard(){
+  const total = transacoesCache.length;
+  const conciliadas = transacoesCache.filter(t=>t.status==='conciliado').length;
+  const semComprovante = transacoesCache.filter(t=>t.status==='sem_comprovante').length;
+  const pendentes = total - conciliadas - semComprovante;
+  const pct = total ? Math.round((conciliadas+semComprovante)/total*100) : 0;
+
+  document.getElementById('statsRow').innerHTML = `
+    <div class="stat"><div class="n mono">${total}</div><div class="l">transações</div></div>
+    <div class="stat"><div class="n mono" style="color:var(--ok);">${conciliadas}</div><div class="l">conciliadas</div></div>
+    <div class="stat"><div class="n mono" style="color:var(--miss);">${pendentes}</div><div class="l">pendentes</div></div>
+    <div class="stat"><div class="n mono" style="color:var(--pend);">${semComprovante}</div><div class="l">sem comprovante</div></div>
+    <div class="stat"><div class="n mono">${pct}%</div><div class="l">documentado</div></div>
+  `;
+  const tbody = document.querySelector('#dashTable tbody');
+  tbody.innerHTML = transacoesCache
+    .sort((a,b)=>a.data.localeCompare(b.data))
+    .map(t=>`<tr>
+      <td class="mono">${t.data}</td>
+      <td>${t.descricao}</td>
+      <td class="mono">${fmtMoeda(t.valor)}</td>
+      <td><span class="tag ${t.status==='conciliado'?'ok':(t.status==='sem_comprovante'?'pend':'miss')}">${t.status}</span></td>
+    </tr>`).join('') || '<tr><td colspan="4" class="empty">Sem transações neste mês.</td></tr>';
+}
+
+/* ===================== EXPORTAR ===================== */
+document.getElementById('btnExportXlsx').addEventListener('click', ()=>{
+  if (!transacoesCache.length) return alert('Sem transações neste mês.');
+  const data = transacoesCache
+    .sort((a,b)=>a.data.localeCompare(b.data))
+    .map(t=>({
+      'Data': t.data, 'Descrição': t.descricao, 'Valor (R$)': t.valor,
+      'Status': t.status, 'Comprovante': t.comprovanteId ? 'Sim' : 'Não',
+      'Observação': t.observacao || ''
+    }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, mesAtual);
+  XLSX.writeFile(wb, `prestacao_contas_${mesAtual}.xlsx`);
+  document.getElementById('exportStatus').textContent = '✓ Planilha baixada.';
+});
+
+document.getElementById('btnExportZip').addEventListener('click', async ()=>{
+  const list = comprovantesCache;
+  if (!list.length) return alert('Sem comprovantes neste mês.');
+  document.getElementById('exportStatus').textContent = 'Montando ZIP...';
+  const zip = new JSZip();
+  for (const c of list){
+    try{
+      const resp = await fetch(c.imageUrl);
+      const blob = await resp.blob();
+      const ext = (blob.type.split('/')[1]) || 'jpg';
+      const safe = (c.descricao||'comprovante').replace(/[^a-z0-9]+/gi,'_').slice(0,30);
+      zip.file(`${c.data}_${safe}.${ext}`, blob);
+    }catch(e){ console.warn('Falha ao baixar', c.imageUrl); }
+  }
+  const content = await zip.generateAsync({type:'blob'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(content);
+  a.download = `comprovantes_${mesAtual}.zip`;
+  a.click();
+  document.getElementById('exportStatus').textContent = '✓ ZIP baixado.';
+});
+</script>
+</body>
+</html>

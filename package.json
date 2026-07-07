@@ -1,0 +1,9 @@
+{
+  "name": "prestacao-contas-curatela",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Conciliação de extrato bancário x comprovantes para prestação de contas de curatela",
+  "dependencies": {
+    "firebase-admin": "^12.0.0"
+  }
+}
