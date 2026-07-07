@@ -61,28 +61,40 @@ module.exports = async (req, res) => {
   }
 
   // 3) Repassa pro Gemini usando a chave que só o servidor conhece.
+  // Se o Gemini responder 503 (modelo sobrecarregado), tenta de novo mais 2 vezes com espera curta.
+  const body = JSON.stringify({
+    contents: [{
+      parts: [
+        { inline_data: { mime_type: mimeType, data: base64 } },
+        { text: prompt },
+      ],
+    }],
+    generationConfig: { responseMimeType: 'application/json' },
+  });
+
+  const espera = (ms) => new Promise(r => setTimeout(r, ms));
+  let ultimaResposta;
   try {
-    const geminiResp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': process.env.GEMINI_API_KEY,
-        },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { inline_data: { mime_type: mimeType, data: base64 } },
-              { text: prompt },
-            ],
-          }],
-          generationConfig: { responseMimeType: 'application/json' },
-        }),
+    for (let tentativa = 0; tentativa < 3; tentativa++){
+      const geminiResp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': process.env.GEMINI_API_KEY,
+          },
+          body,
+        }
+      );
+      const data = await geminiResp.json();
+      if (geminiResp.status !== 503 || tentativa === 2){
+        return res.status(geminiResp.status).json(data);
       }
-    );
-    const data = await geminiResp.json();
-    return res.status(geminiResp.status).json(data);
+      ultimaResposta = data;
+      await espera(1500 * (tentativa + 1)); // 1.5s, depois 3s
+    }
+    return res.status(503).json(ultimaResposta);
   } catch (e) {
     return res.status(502).json({ error: 'Falha ao chamar o Gemini: ' + e.message });
   }
