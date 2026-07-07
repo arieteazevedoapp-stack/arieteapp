@@ -579,7 +579,7 @@ document.getElementById('btnParsePdf').addEventListener('click', async ()=>{
     document.getElementById('importStatus').textContent =
       previewRows.length ? `${previewRows.length} transações encontradas — revise antes de confirmar.` : 'Nenhuma transação reconhecida. Tente novamente ou adicione manualmente.';
   }catch(e){
-    document.getElementById('importStatus').textContent = 'Erro: ' + e.message;
+    document.getElementById('importStatus').textContent = 'Erro: ' + traduzErroGemini(e.message);
   }
 });
 
@@ -662,8 +662,8 @@ document.getElementById('comprovanteInput').addEventListener('change', async (e)
   compFiles = await Promise.all(rawFiles.map(f => compressImage(f)));
   e.target.value = ''; // limpa o campo já aqui — os arquivos já estão guardados em compFiles, pronto pra nova seleção
   compReview = [];
-  document.getElementById('ocrStatus').textContent = `Lendo ${compFiles.length} foto(s) com o Gemini...`;
   for (let i=0;i<compFiles.length;i++){
+    document.getElementById('ocrStatus').textContent = `Lendo foto ${i+1} de ${compFiles.length} com o Gemini...`;
     try{
       const result = await callGeminiExtract(compFiles[i], PROMPT_COMPROVANTE);
       (result||[]).forEach(r=>{
@@ -675,13 +675,22 @@ document.getElementById('comprovanteInput').addEventListener('change', async (e)
         });
       });
     }catch(err){
-      compReview.push({ fileIdx:i, data:'', valor:'', descricao:`(falha na leitura: ${err.message} — preencha manualmente)` });
+      compReview.push({ fileIdx:i, data:'', valor:'', descricao:`(falha na leitura: ${traduzErroGemini(err.message)} — preencha manualmente)` });
     }
+    // pequeno intervalo entre fotos pra não estourar o limite de requisições por minuto do plano gratuito
+    if (i < compFiles.length-1) await new Promise(r=>setTimeout(r, 2500));
   }
   document.getElementById('ocrStatus').textContent =
     `${compReview.length} comprovante(s) identificado(s) em ${compFiles.length} foto(s) — revise abaixo antes de salvar.`;
   renderCompReviewTable();
 });
+
+function traduzErroGemini(msg){
+  if (/quota|rate.?limit|429/i.test(msg)){
+    return 'limite de uso gratuito do Gemini atingido nesse minuto — espere cerca de 1 minuto e tente essa foto de novo';
+  }
+  return msg;
+}
 
 function findDuplicateInfo(item, idx){
   // Duplicata dentro da própria leva sendo revisada agora
