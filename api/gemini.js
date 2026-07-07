@@ -89,6 +89,20 @@ module.exports = async (req, res) => {
     );
   }
 
+  // Extrai quantos segundos esperar a partir do erro 429 do Gemini (vem no campo "details" ou no texto da mensagem).
+  function extrairEsperaSegundos(data){
+    const detalhes = data?.error?.details || [];
+    const retryInfo = detalhes.find(d => d['@type']?.includes('RetryInfo'));
+    if (retryInfo?.retryDelay){
+      const m = String(retryInfo.retryDelay).match(/([\d.]+)s/);
+      if (m) return parseFloat(m[1]);
+    }
+    const msg = data?.error?.message || '';
+    const m2 = msg.match(/retry in ([\d.]+)s/i);
+    if (m2) return parseFloat(m2[1]);
+    return 15; // fallback se não conseguir extrair
+  }
+
   try {
     let ultimaResposta, ultimoStatus;
 
@@ -96,6 +110,16 @@ module.exports = async (req, res) => {
     for (let tentativa = 0; tentativa < 2; tentativa++){
       const geminiResp = await chamarGemini(GEMINI_MODEL_PRIMARY);
       const data = await geminiResp.json();
+
+      if (geminiResp.status === 429){
+        // Limite de requisições por minuto do plano gratuito — espera o tempo indicado e tenta de novo (só 1 vez).
+        const segundos = Math.min(extrairEsperaSegundos(data) + 1, 55);
+        await espera(segundos * 1000);
+        const retryResp = await chamarGemini(GEMINI_MODEL_PRIMARY);
+        const retryData = await retryResp.json();
+        return res.status(retryResp.status).json(retryData);
+      }
+
       if (geminiResp.status !== 503) return res.status(geminiResp.status).json(data);
       ultimaResposta = data; ultimoStatus = geminiResp.status;
       await espera(1500 * (tentativa + 1)); // 1.5s, depois 3s
