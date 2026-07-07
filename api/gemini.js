@@ -19,7 +19,8 @@ if (!admin.apps.length) {
   }
 }
 
-const GEMINI_MODEL = 'gemini-3.5-flash';
+const GEMINI_MODEL_PRIMARY = 'gemini-3.5-flash';
+const GEMINI_MODEL_FALLBACK = 'gemini-2.5-flash'; // usado só se o principal continuar sobrecarregado
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
 
 module.exports = async (req, res) => {
@@ -61,7 +62,7 @@ module.exports = async (req, res) => {
   }
 
   // 3) Repassa pro Gemini usando a chave que só o servidor conhece.
-  // Se o Gemini responder 503 (modelo sobrecarregado), tenta de novo mais 2 vezes com espera curta.
+  // Se responder 503 (sobrecarregado), tenta de novo com espera curta; se persistir, troca de modelo.
   const body = JSON.stringify({
     contents: [{
       parts: [
@@ -73,28 +74,39 @@ module.exports = async (req, res) => {
   });
 
   const espera = (ms) => new Promise(r => setTimeout(r, ms));
-  let ultimaResposta;
-  try {
-    for (let tentativa = 0; tentativa < 3; tentativa++){
-      const geminiResp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': process.env.GEMINI_API_KEY,
-          },
-          body,
-        }
-      );
-      const data = await geminiResp.json();
-      if (geminiResp.status !== 503 || tentativa === 2){
-        return res.status(geminiResp.status).json(data);
+
+  async function chamarGemini(modelo){
+    return fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': process.env.GEMINI_API_KEY,
+        },
+        body,
       }
-      ultimaResposta = data;
+    );
+  }
+
+  try {
+    let ultimaResposta, ultimoStatus;
+
+    // até 2 tentativas no modelo principal
+    for (let tentativa = 0; tentativa < 2; tentativa++){
+      const geminiResp = await chamarGemini(GEMINI_MODEL_PRIMARY);
+      const data = await geminiResp.json();
+      if (geminiResp.status !== 503) return res.status(geminiResp.status).json(data);
+      ultimaResposta = data; ultimoStatus = geminiResp.status;
       await espera(1500 * (tentativa + 1)); // 1.5s, depois 3s
     }
-    return res.status(503).json(ultimaResposta);
+
+    // se continuou sobrecarregado, tenta 1 vez no modelo alternativo
+    const geminiRespFallback = await chamarGemini(GEMINI_MODEL_FALLBACK);
+    const dataFallback = await geminiRespFallback.json();
+    if (geminiRespFallback.status !== 503) return res.status(geminiRespFallback.status).json(dataFallback);
+
+    return res.status(503).json(dataFallback || ultimaResposta);
   } catch (e) {
     return res.status(502).json({ error: 'Falha ao chamar o Gemini: ' + e.message });
   }
