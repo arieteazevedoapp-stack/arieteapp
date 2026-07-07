@@ -650,10 +650,14 @@ document.getElementById('btnConfirmImport').addEventListener('click', async ()=>
 });
 
 /* ===================== COMPROVANTES (multi-foto via Gemini) ===================== */
-const PROMPT_COMPROVANTE = `Esta imagem pode conter um ou mais comprovantes de pagamento (recibo, nota fiscal, comprovante Pix, comprovante de transferência etc). Identifique CADA comprovante separadamente, mesmo que estejam vários na mesma foto.
+function gerarPromptComprovante(){
+  const anoRef = mesAtual.slice(0,4);
+  return `Esta imagem pode conter um ou mais comprovantes de pagamento (recibo, nota fiscal, comprovante Pix, comprovante de transferência etc). Identifique CADA comprovante separadamente, mesmo que estejam vários na mesma foto.
 Retorne SOMENTE um array JSON, sem markdown, neste formato exato:
 [{"data":"dd/mm/aaaa","valor": numero, "descricao":"estabelecimento ou motivo do pagamento, texto curto"}]
-Se não conseguir identificar algum campo com confiança, use null nesse campo. Datas sempre no formato dd/mm/aaaa.`;
+Se não conseguir identificar algum campo com confiança, use null nesse campo. Datas sempre no formato dd/mm/aaaa.
+Atenção especial ao ANO da data: leia o ano com cuidado redobrado, não confunda os dígitos. O comprovante provavelmente é do ano ${anoRef} — se você ler um ano diferente, releia com atenção antes de responder, e só use um ano diferente de ${anoRef} se tiver certeza absoluta de que é isso que está escrito no documento.`;
+}
 
 document.getElementById('comprovanteInput').addEventListener('change', async (e)=>{
   const rawFiles = Array.from(e.target.files || []);
@@ -665,7 +669,7 @@ document.getElementById('comprovanteInput').addEventListener('change', async (e)
   for (let i=0;i<compFiles.length;i++){
     document.getElementById('ocrStatus').textContent = `Lendo foto ${i+1} de ${compFiles.length} com o Gemini...`;
     try{
-      const result = await callGeminiExtract(compFiles[i], PROMPT_COMPROVANTE);
+      const result = await callGeminiExtract(compFiles[i], gerarPromptComprovante());
       (result||[]).forEach(r=>{
         compReview.push({
           fileIdx: i,
@@ -721,10 +725,14 @@ function renderCompReviewTable(){
   compReview.forEach((r, idx)=>{
     const thumbUrl = URL.createObjectURL(compFiles[r.fileIdx]);
     const dupMsg = findDuplicateInfo(r, idx);
+    const mesDiferente = r.data && mesFromISO(r.data) !== mesAtual;
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><img src="${thumbUrl}" class="thumb" onclick="window.open('${thumbUrl}','_blank')"></td>
-      <td><input type="date" value="${r.data||''}" data-idx="${idx}" data-field="data" style="width:130px;"></td>
+      <td>
+        <input type="date" value="${r.data||''}" data-idx="${idx}" data-field="data" style="width:130px;">
+        <div class="hint" data-mes-hint="${idx}" style="color:var(--pend); font-weight:600; margin-top:3px; ${mesDiferente?'':'display:none;'}">⚠ mês diferente do selecionado — confira o ano</div>
+      </td>
       <td><input type="text" class="mono" value="${r.valor}" data-idx="${idx}" data-field="valor" style="width:90px;"></td>
       <td><input type="text" value="${r.descricao}" data-idx="${idx}" data-field="descricao" style="width:100%;">
           <div class="hint" data-dup-hint="${idx}" style="color:var(--miss); font-weight:600; margin-top:3px; ${dupMsg?'':'display:none;'}">⚠ possível duplicata — ${dupMsg||''}</div></td>
@@ -735,13 +743,18 @@ function renderCompReviewTable(){
     inp.addEventListener('input', e=>{
       const idx = +e.target.dataset.idx, field = e.target.dataset.field;
       compReview[idx][field] = field==='valor' ? parseFloat(e.target.value) : e.target.value;
-      // Atualiza só os avisos de duplicata, sem recriar os campos (evita perder o foco a cada letra digitada)
+      // Atualiza só os avisos (duplicata e mês diferente), sem recriar os campos (evita perder o foco a cada letra digitada)
       compReview.forEach((row, i)=>{
         const hintEl = tbody.querySelector(`[data-dup-hint="${i}"]`);
-        if (!hintEl) return;
-        const msg = findDuplicateInfo(row, i);
-        if (msg){ hintEl.style.display=''; hintEl.textContent = '⚠ possível duplicata — ' + msg; }
-        else { hintEl.style.display='none'; }
+        if (hintEl){
+          const msg = findDuplicateInfo(row, i);
+          if (msg){ hintEl.style.display=''; hintEl.textContent = '⚠ possível duplicata — ' + msg; }
+          else { hintEl.style.display='none'; }
+        }
+        const mesHintEl = tbody.querySelector(`[data-mes-hint="${i}"]`);
+        if (mesHintEl){
+          mesHintEl.style.display = (row.data && mesFromISO(row.data) !== mesAtual) ? '' : 'none';
+        }
       });
     });
   });
@@ -758,6 +771,12 @@ document.getElementById('btnSaveAllComp').addEventListener('click', async ()=>{
     const ok = confirm(`Encontrei ${duplicatas.length} possível(is) duplicata(s) (mesmo valor e data de algo já existente). Quer salvar assim mesmo?`);
     if (!ok) return;
   }
+  const foraDoMes = compReview.filter(r => r.data && mesFromISO(r.data) !== mesAtual);
+  if (foraDoMes.length){
+    const meses = [...new Set(foraDoMes.map(r=>mesFromISO(r.data)))].join(', ');
+    const ok = confirm(`${foraDoMes.length} comprovante(s) têm data de um mês diferente do selecionado (${mesAtual}) — vão ser salvos em: ${meses}. Confira se o ano não foi lido errado antes de continuar. Salvar assim mesmo?`);
+    if (!ok) return;
+  }
   document.getElementById('compSaveStatus').textContent = 'Salvando...';
   const dataUrlByFileIdx = {};
   for (const r of compReview){
@@ -771,7 +790,10 @@ document.getElementById('btnSaveAllComp').addEventListener('click', async ()=>{
       mes: mesFromISO(r.data), status: 'pendente', transacaoId: null, criadoEm: Date.now()
     });
   }
-  document.getElementById('compSaveStatus').textContent = '✓ Comprovantes salvos.';
+  document.getElementById('compSaveStatus').textContent =
+    foraDoMes.length
+      ? `✓ Comprovantes salvos (${foraDoMes.length} foram pra outro mês — mude o seletor de mês no topo pra vê-los).`
+      : '✓ Comprovantes salvos.';
   document.getElementById('comprovanteInput').value = '';
   compFiles = []; compReview = [];
   document.getElementById('cardRevisaoComp').style.display = 'none';
