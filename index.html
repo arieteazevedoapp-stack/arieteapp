@@ -660,6 +660,7 @@ document.getElementById('comprovanteInput').addEventListener('change', async (e)
   if (!rawFiles.length) return;
   document.getElementById('ocrStatus').textContent = `Preparando ${rawFiles.length} foto(s)...`;
   compFiles = await Promise.all(rawFiles.map(f => compressImage(f)));
+  e.target.value = ''; // limpa o campo já aqui — os arquivos já estão guardados em compFiles, pronto pra nova seleção
   compReview = [];
   document.getElementById('ocrStatus').textContent = `Lendo ${compFiles.length} foto(s) com o Gemini...`;
   for (let i=0;i<compFiles.length;i++){
@@ -674,7 +675,7 @@ document.getElementById('comprovanteInput').addEventListener('change', async (e)
         });
       });
     }catch(err){
-      compReview.push({ fileIdx:i, data:'', valor:'', descricao:'(falha na leitura — preencha manualmente)' });
+      compReview.push({ fileIdx:i, data:'', valor:'', descricao:`(falha na leitura: ${err.message} — preencha manualmente)` });
     }
   }
   document.getElementById('ocrStatus').textContent =
@@ -717,7 +718,7 @@ function renderCompReviewTable(){
       <td><input type="date" value="${r.data||''}" data-idx="${idx}" data-field="data" style="width:130px;"></td>
       <td><input type="text" class="mono" value="${r.valor}" data-idx="${idx}" data-field="valor" style="width:90px;"></td>
       <td><input type="text" value="${r.descricao}" data-idx="${idx}" data-field="descricao" style="width:100%;">
-          ${dupMsg ? `<div class="hint" style="color:var(--miss); font-weight:600; margin-top:3px;">⚠ possível duplicata — ${dupMsg}</div>` : ''}</td>
+          <div class="hint" data-dup-hint="${idx}" style="color:var(--miss); font-weight:600; margin-top:3px; ${dupMsg?'':'display:none;'}">⚠ possível duplicata — ${dupMsg||''}</div></td>
       <td><button class="btn ghost" data-del="${idx}" style="padding:4px 8px;">×</button></td>`;
     tbody.appendChild(tr);
   });
@@ -725,7 +726,14 @@ function renderCompReviewTable(){
     inp.addEventListener('input', e=>{
       const idx = +e.target.dataset.idx, field = e.target.dataset.field;
       compReview[idx][field] = field==='valor' ? parseFloat(e.target.value) : e.target.value;
-      renderCompReviewTable();
+      // Atualiza só os avisos de duplicata, sem recriar os campos (evita perder o foco a cada letra digitada)
+      compReview.forEach((row, i)=>{
+        const hintEl = tbody.querySelector(`[data-dup-hint="${i}"]`);
+        if (!hintEl) return;
+        const msg = findDuplicateInfo(row, i);
+        if (msg){ hintEl.style.display=''; hintEl.textContent = '⚠ possível duplicata — ' + msg; }
+        else { hintEl.style.display='none'; }
+      });
     });
   });
   tbody.querySelectorAll('[data-del]').forEach(b=>{
