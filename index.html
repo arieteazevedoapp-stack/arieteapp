@@ -201,7 +201,7 @@ service cloud.firestore {
       </div>
       <div style="overflow-x:auto;">
         <table id="previewTable">
-          <thead><tr><th>Data</th><th>Descrição</th><th>Valor (R$)</th><th></th></tr></thead>
+          <thead><tr><th>Data</th><th>Descrição</th><th>Valor (R$)</th><th>Categoria</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -277,7 +277,7 @@ service cloud.firestore {
       <h3>Todas as transações do mês</h3>
       <div style="overflow-x:auto;">
         <table id="dashTable">
-          <thead><tr><th>Data</th><th>Descrição</th><th>Valor</th><th>Status</th></tr></thead>
+          <thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Status</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -539,10 +539,26 @@ function traduzErroAuth(e){
 }
 
 /* ===================== IMPORTAR EXTRATO (PDF via Gemini) ===================== */
+const CATEGORIAS = [
+  'Alimentação/Mercado', 'Farmácia/Saúde', 'Moradia/Contas fixas', 'Transporte',
+  'Cuidados/Higiene', 'Vestuário', 'Lazer/Bem-estar', 'Serviços/Profissionais',
+  'Transferência recebida', 'Rendimento/Aplicação', 'Salário/Recebimento',
+  'Tarifa/Taxa bancária', 'Outros'
+];
+
+// Categorias que não precisam de comprovante próprio (lançamentos automáticos do próprio banco,
+// não são gastos/pagamentos que a pessoa fez — são cobranças ou créditos do banco em si).
+const CATEGORIAS_SEM_COMPROVANTE = ['Rendimento/Aplicação', 'Tarifa/Taxa bancária'];
+
 const PROMPT_EXTRATO = `Você recebe um extrato bancário em PDF. Extraia TODAS as transações (não inclua saldo anterior, saldo final, cabeçalho ou rodapé).
 Retorne SOMENTE um array JSON, sem markdown, neste formato exato:
-[{"data":"dd/mm/aaaa","descricao":"texto curto da transação","valor": numero}]
-Regras: valor negativo para saídas/débitos/pagamentos, valor positivo para entradas/créditos/depósitos. Datas sempre no formato dd/mm/aaaa.`;
+[{"data":"dd/mm/aaaa","descricao":"texto curto da transação","valor": numero, "categoria":"uma das opções da lista"}]
+Regras:
+- valor negativo para saídas/débitos/pagamentos, valor positivo para entradas/créditos/depósitos.
+- Datas sempre no formato dd/mm/aaaa.
+- Para transações de Pix (enviado ou recebido), SEMPRE inclua o nome completo do beneficiário/pagador exatamente como aparece no extrato na descrição (ex: "Pix enviado - João da Silva"), nunca generalize como apenas "PIX ENVIADO" se o nome estiver disponível no documento.
+- Classifique como "Tarifa/Taxa bancária" qualquer cobrança do próprio banco: tarifa de manutenção/pacote de serviços, IOF, taxas de operação, anuidade de cartão, juros/multa cobrados pelo banco, e afins — são lançamentos do banco, não pagamentos feitos pela pessoa.
+Para "categoria", escolha SEMPRE uma destas opções exatas (a que melhor combinar com a descrição): ${CATEGORIAS.join(', ')}.`;
 
 document.getElementById('btnParsePdf').addEventListener('click', async ()=>{
   const file = document.getElementById('pdfInput').files[0];
@@ -553,7 +569,8 @@ document.getElementById('btnParsePdf').addEventListener('click', async ()=>{
     previewRows = (result||[]).map(r=>({
       data: toISODate(r.data) || '',
       descricao: r.descricao || '(sem descrição)',
-      valor: typeof r.valor === 'number' ? r.valor : parseMoeda(String(r.valor))
+      valor: typeof r.valor === 'number' ? r.valor : parseMoeda(String(r.valor)),
+      categoria: CATEGORIAS.includes(r.categoria) ? r.categoria : 'Outros'
     }));
     renderPreviewTable();
     document.getElementById('importStatus').textContent =
@@ -568,17 +585,29 @@ function renderPreviewTable(){
   tbody.innerHTML = '';
   previewRows.forEach((r, idx)=>{
     const tr = document.createElement('tr');
+    const opcoesCategoria = CATEGORIAS.map(c=>
+      `<option value="${c}" ${r.categoria===c?'selected':''}>${c}</option>`
+    ).join('');
+    const dispensado = CATEGORIAS_SEM_COMPROVANTE.includes(r.categoria);
     tr.innerHTML = `
       <td><input type="date" value="${r.data||''}" data-idx="${idx}" data-field="data" style="width:130px;"></td>
       <td><input type="text" value="${r.descricao}" data-idx="${idx}" data-field="descricao" style="width:100%;"></td>
       <td><input type="text" class="mono" value="${r.valor}" data-idx="${idx}" data-field="valor" style="width:100px;"></td>
+      <td>
+        <select data-idx="${idx}" data-field="categoria" style="width:100%;">${opcoesCategoria}</select>
+        <div class="hint" data-dispensa-hint="${idx}" style="color:var(--ok); font-weight:600; ${dispensado?'':'display:none;'}">✓ dispensa comprovante</div>
+      </td>
       <td><button class="btn ghost" data-del="${idx}" style="padding:4px 8px;">×</button></td>`;
     tbody.appendChild(tr);
   });
-  tbody.querySelectorAll('input').forEach(inp=>{
+  tbody.querySelectorAll('input, select').forEach(inp=>{
     inp.addEventListener('input', e=>{
       const idx = +e.target.dataset.idx, field = e.target.dataset.field;
       previewRows[idx][field] = field==='valor' ? parseFloat(e.target.value) : e.target.value;
+      if (field === 'categoria'){
+        const hintEl = tbody.querySelector(`[data-dispensa-hint="${idx}"]`);
+        if (hintEl) hintEl.style.display = CATEGORIAS_SEM_COMPROVANTE.includes(e.target.value) ? '' : 'none';
+      }
     });
   });
   tbody.querySelectorAll('[data-del]').forEach(b=>{
@@ -587,7 +616,7 @@ function renderPreviewTable(){
 }
 
 document.getElementById('btnAddRow').addEventListener('click', ()=>{
-  previewRows.push({data:'', descricao:'', valor:0});
+  previewRows.push({data:'', descricao:'', valor:0, categoria:'Outros'});
   renderPreviewTable();
 });
 
@@ -598,11 +627,16 @@ document.getElementById('btnConfirmImport').addEventListener('click', async ()=>
   const batch = db.batch();
   previewRows.forEach(r=>{
     if (!r.data || isNaN(r.valor)) return;
+    const categoria = r.categoria || 'Outros';
+    const dispensado = CATEGORIAS_SEM_COMPROVANTE.includes(categoria);
     const ref = db.collection('transacoes').doc();
     batch.set(ref, {
-      data: r.data, descricao: r.descricao, valor: r.valor,
-      mes: mesFromISO(r.data), status: 'pendente',
-      comprovanteId: null, observacao: '', criadoEm: Date.now()
+      data: r.data, descricao: r.descricao, valor: r.valor, categoria,
+      mes: mesFromISO(r.data),
+      status: dispensado ? 'sem_comprovante' : 'pendente',
+      comprovanteId: null,
+      observacao: dispensado ? 'Lançamento automático do banco — dispensa comprovante' : '',
+      criadoEm: Date.now()
     });
   });
   await batch.commit();
@@ -847,9 +881,10 @@ function renderDashboard(){
     .map(t=>`<tr>
       <td class="mono">${t.data}</td>
       <td>${t.descricao}</td>
+      <td>${t.categoria || 'Outros'}</td>
       <td class="mono">${fmtMoeda(t.valor)}</td>
       <td><span class="tag ${t.status==='conciliado'?'ok':(t.status==='sem_comprovante'?'pend':'miss')}">${t.status}</span></td>
-    </tr>`).join('') || '<tr><td colspan="4" class="empty">Sem transações neste mês.</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="5" class="empty">Sem transações neste mês.</td></tr>';
 }
 
 /* ===================== EXPORTAR ===================== */
@@ -858,7 +893,7 @@ document.getElementById('btnExportXlsx').addEventListener('click', ()=>{
   const data = transacoesCache
     .sort((a,b)=>a.data.localeCompare(b.data))
     .map(t=>({
-      'Data': t.data, 'Descrição': t.descricao, 'Valor (R$)': t.valor,
+      'Data': t.data, 'Descrição': t.descricao, 'Categoria': t.categoria || 'Outros', 'Valor (R$)': t.valor,
       'Status': t.status, 'Comprovante': t.comprovanteId ? 'Sim' : 'Não',
       'Observação': t.observacao || ''
     }));
