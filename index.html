@@ -761,11 +761,29 @@ document.getElementById('btnSaveAllComp').addEventListener('click', async ()=>{
   loadMesData();
 });
 
+let editingCompId = null;
+
 function renderComprovantes(){
   const el = document.getElementById('listaComprovantes');
   const list = comprovantesCache.filter(c=>c.mes===mesAtual);
   if (!list.length){ el.innerHTML = '<div class="empty">Nenhum comprovante neste mês.</div>'; return; }
-  el.innerHTML = list.map(c=>`
+  el.innerHTML = list.map(c=>{
+    if (editingCompId === c.id){
+      return `
+      <div class="row" style="justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--paper-line); flex-wrap:wrap;">
+        <div class="row" style="flex-wrap:wrap; gap:6px;">
+          <img src="${c.imageUrl}" class="thumb" onclick="window.open('${c.imageUrl}','_blank')">
+          <input type="date" value="${c.data}" data-edit-field="data" data-edit-id="${c.id}" style="width:135px;">
+          <input type="text" class="mono" value="${c.valor}" data-edit-field="valor" data-edit-id="${c.id}" style="width:90px;">
+          <input type="text" value="${c.descricao||''}" data-edit-field="descricao" data-edit-id="${c.id}" style="flex:1; min-width:140px;">
+        </div>
+        <div class="row">
+          <button class="btn" data-save-comp="${c.id}" style="padding:6px 10px;">Salvar</button>
+          <button class="btn ghost" data-cancel-comp style="padding:6px 10px;">Cancelar</button>
+        </div>
+      </div>`;
+    }
+    return `
     <div class="row" style="justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--paper-line);">
       <div class="row">
         <img src="${c.imageUrl}" class="thumb" onclick="window.open('${c.imageUrl}','_blank')">
@@ -774,8 +792,47 @@ function renderComprovantes(){
           <div class="hint mono">${c.data} · ${fmtMoeda(c.valor)}</div>
         </div>
       </div>
-      <span class="tag ${c.status==='conciliado'?'ok':'pend'}">${c.status}</span>
-    </div>`).join('');
+      <div class="row">
+        <span class="tag ${c.status==='conciliado'?'ok':'pend'}">${c.status}</span>
+        <button class="btn ghost" data-edit-comp="${c.id}" style="padding:4px 8px;">Editar</button>
+        <button class="btn ghost" data-del-comp="${c.id}" style="padding:4px 8px; color:var(--miss);">Excluir</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  el.querySelectorAll('[data-edit-comp]').forEach(b=>{
+    b.addEventListener('click', ()=>{ editingCompId = b.dataset.editComp; renderComprovantes(); });
+  });
+  el.querySelectorAll('[data-cancel-comp]').forEach(b=>{
+    b.addEventListener('click', ()=>{ editingCompId = null; renderComprovantes(); });
+  });
+  el.querySelectorAll('[data-save-comp]').forEach(b=>{
+    b.addEventListener('click', async ()=>{
+      const id = b.dataset.saveComp;
+      const wrapper = b.closest('.row').parentElement;
+      const data = wrapper.querySelector(`[data-edit-field="data"][data-edit-id="${id}"]`).value;
+      const valor = parseMoeda(wrapper.querySelector(`[data-edit-field="valor"][data-edit-id="${id}"]`).value);
+      const descricao = wrapper.querySelector(`[data-edit-field="descricao"][data-edit-id="${id}"]`).value;
+      if (!data || isNaN(valor)) return alert('Preencha data e valor corretamente.');
+      await db.collection('comprovantes').doc(id).update({ data, valor, descricao, mes: mesFromISO(data) });
+      editingCompId = null;
+      loadMesData();
+    });
+  });
+  el.querySelectorAll('[data-del-comp]').forEach(b=>{
+    b.addEventListener('click', async ()=>{
+      const id = b.dataset.delComp;
+      const comp = comprovantesCache.find(c=>c.id===id);
+      const ok = confirm('Excluir este comprovante? Essa ação não pode ser desfeita.');
+      if (!ok) return;
+      // Se estava conciliado com uma transação, devolve a transação pro status pendente.
+      if (comp && comp.status==='conciliado' && comp.transacaoId){
+        await db.collection('transacoes').doc(comp.transacaoId).update({ status:'pendente', comprovanteId:null });
+      }
+      await db.collection('comprovantes').doc(id).delete();
+      loadMesData();
+    });
+  });
 }
 
 /* ===================== CARREGAR DADOS DO MÊS ===================== */
