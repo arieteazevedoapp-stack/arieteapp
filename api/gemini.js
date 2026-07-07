@@ -1,15 +1,22 @@
 const admin = require('firebase-admin');
 
 // Inicializa o Firebase Admin uma única vez (variáveis vêm do Vercel, nunca do navegador).
+// Isso fica num try/catch pra que, se a chave estiver mal formatada, a função responda
+// com um erro claro em vez de simplesmente cair (o que aparecia como "503 Service Unavailable").
+let initError = null;
 if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      // No Vercel, cole a chave com \n literais — aqui a gente converte de volta pra quebra de linha real.
-      privateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
-    }),
-  });
+  try {
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        // No Vercel, cole a chave com \n literais — aqui a gente converte de volta pra quebra de linha real.
+        privateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
+      }),
+    });
+  } catch (e) {
+    initError = e.message;
+  }
 }
 
 const GEMINI_MODEL = 'gemini-3.5-flash';
@@ -23,6 +30,19 @@ module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Método não permitido' });
 
+  // 0) Confere se as variáveis de ambiente básicas existem e se o Admin inicializou.
+  const faltando = [];
+  if (!process.env.FIREBASE_PROJECT_ID) faltando.push('FIREBASE_PROJECT_ID');
+  if (!process.env.FIREBASE_CLIENT_EMAIL) faltando.push('FIREBASE_CLIENT_EMAIL');
+  if (!process.env.FIREBASE_PRIVATE_KEY) faltando.push('FIREBASE_PRIVATE_KEY');
+  if (!process.env.GEMINI_API_KEY) faltando.push('GEMINI_API_KEY');
+  if (faltando.length) {
+    return res.status(500).json({ error: 'Variáveis de ambiente faltando no Vercel: ' + faltando.join(', ') });
+  }
+  if (initError) {
+    return res.status(500).json({ error: 'Falha ao inicializar o Firebase Admin (confira o formato da FIREBASE_PRIVATE_KEY): ' + initError });
+  }
+
   // 1) Confere se quem está chamando está logado no app (token do Firebase Auth).
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -31,17 +51,13 @@ module.exports = async (req, res) => {
   try {
     await admin.auth().verifyIdToken(token);
   } catch (e) {
-    return res.status(401).json({ error: 'Sessão inválida ou expirada — faça login novamente.' });
+    return res.status(401).json({ error: 'Sessão inválida ou expirada — faça login novamente: ' + e.message });
   }
 
   // 2) Recebe o arquivo (PDF ou foto, já em base64) e o prompt vindos do app.
   const { base64, mimeType, prompt } = req.body || {};
   if (!base64 || !mimeType || !prompt) {
     return res.status(400).json({ error: 'Parâmetros faltando (base64, mimeType ou prompt).' });
-  }
-
-  if (!process.env.GEMINI_API_KEY) {
-    return res.status(500).json({ error: 'GEMINI_API_KEY não configurada no servidor.' });
   }
 
   // 3) Repassa pro Gemini usando a chave que só o servidor conhece.
