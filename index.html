@@ -195,6 +195,20 @@ service cloud.firestore {
       <p class="hint" id="parseHint">O Gemini lê o PDF diretamente — mas <strong>revise a tabela abaixo antes de confirmar</strong>. Você pode editar, apagar ou adicionar linhas manualmente.</p>
     </div>
     <div class="card">
+      <h3>Saldo do período</h3>
+      <p class="hint">O Gemini tenta ler esses valores direto do extrato — confira e corrija se precisar (alguns extratos não trazem os dois, aí é só preencher manualmente se você souber).</p>
+      <div class="col2">
+        <div>
+          <label>Saldo inicial do mês (R$)</label>
+          <input type="text" id="saldoInicialInput" class="mono" placeholder="0,00" style="width:100%;">
+        </div>
+        <div>
+          <label>Saldo final do mês, conforme extrato (R$)</label>
+          <input type="text" id="saldoFinalInput" class="mono" placeholder="0,00" style="width:100%;">
+        </div>
+      </div>
+    </div>
+    <div class="card">
       <div class="row" style="justify-content:space-between;">
         <h3>Prévia — <span id="previewMes">-</span></h3>
         <button class="btn ghost" id="btnAddRow">+ linha manual</button>
@@ -270,7 +284,11 @@ service cloud.firestore {
   <!-- DASHBOARD -->
   <section class="screen" id="screen-dashboard">
     <div class="card">
-      <h2>Resumo do mês</h2>
+      <h2>Balanço do mês</h2>
+      <div id="balancoMes"></div>
+    </div>
+    <div class="card">
+      <h2>Resumo de conciliação</h2>
       <div class="row" id="statsRow"></div>
     </div>
     <div class="card">
@@ -553,15 +571,21 @@ const CATEGORIAS = [
 // não são gastos/pagamentos que a pessoa fez — são cobranças ou créditos do banco em si).
 const CATEGORIAS_SEM_COMPROVANTE = ['Rendimento/Aplicação', 'Tarifa/Taxa bancária'];
 
-const PROMPT_EXTRATO = `Você recebe um extrato bancário em PDF. Extraia TODAS as transações (não inclua saldo anterior, saldo final, cabeçalho ou rodapé).
-Retorne SOMENTE um array JSON, sem markdown, neste formato exato:
-[{"data":"dd/mm/aaaa","descricao":"texto curto da transação","valor": numero, "categoria":"uma das opções da lista"}]
+const PROMPT_EXTRATO = `Você recebe um extrato bancário em PDF. Extraia:
+1. O saldo anterior/inicial do período (o saldo que a conta tinha no início do extrato) e o saldo final do período, se estiverem indicados no documento.
+2. TODAS as transações do período (não conte saldo anterior/final como transação).
+Retorne SOMENTE um objeto JSON, sem markdown, neste formato exato:
+{"saldo_inicial": numero ou null, "saldo_final": numero ou null, "transacoes": [{"data":"dd/mm/aaaa","descricao":"texto curto da transação","valor": numero, "categoria":"uma das opções da lista"}]}
 Regras:
 - valor negativo para saídas/débitos/pagamentos, valor positivo para entradas/créditos/depósitos.
 - Datas sempre no formato dd/mm/aaaa.
 - Para transações de Pix (enviado ou recebido), SEMPRE inclua o nome completo do beneficiário/pagador exatamente como aparece no extrato na descrição (ex: "Pix enviado - João da Silva"), nunca generalize como apenas "PIX ENVIADO" se o nome estiver disponível no documento.
 - Classifique como "Tarifa/Taxa bancária" qualquer cobrança do próprio banco: tarifa de manutenção/pacote de serviços, IOF, taxas de operação, anuidade de cartão, juros/multa cobrados pelo banco, e afins — são lançamentos do banco, não pagamentos feitos pela pessoa.
+- Se não encontrar saldo anterior ou saldo final no documento, use null nesses campos (não invente valor).
 Para "categoria", escolha SEMPRE uma destas opções exatas (a que melhor combinar com a descrição): ${CATEGORIAS.join(', ')}.`;
+
+let previewSaldoInicial = null;
+let previewSaldoFinalExtrato = null;
 
 document.getElementById('btnParsePdf').addEventListener('click', async ()=>{
   const file = document.getElementById('pdfInput').files[0];
@@ -569,7 +593,12 @@ document.getElementById('btnParsePdf').addEventListener('click', async ()=>{
   document.getElementById('importStatus').textContent = 'Lendo PDF com o Gemini...';
   try{
     const result = await callGeminiExtract(file, PROMPT_EXTRATO);
-    previewRows = (result||[]).map(r=>({
+    const transacoesLidas = Array.isArray(result) ? result : (result.transacoes || []);
+    previewSaldoInicial = (!Array.isArray(result) && typeof result.saldo_inicial === 'number') ? result.saldo_inicial : null;
+    previewSaldoFinalExtrato = (!Array.isArray(result) && typeof result.saldo_final === 'number') ? result.saldo_final : null;
+    document.getElementById('saldoInicialInput').value = previewSaldoInicial ?? '';
+    document.getElementById('saldoFinalInput').value = previewSaldoFinalExtrato ?? '';
+    previewRows = transacoesLidas.map(r=>({
       data: toISODate(r.data) || '',
       descricao: r.descricao || '(sem descrição)',
       valor: typeof r.valor === 'number' ? r.valor : parseMoeda(String(r.valor)),
@@ -582,6 +611,9 @@ document.getElementById('btnParsePdf').addEventListener('click', async ()=>{
     document.getElementById('importStatus').textContent = 'Erro: ' + traduzErroGemini(e.message);
   }
 });
+
+document.getElementById('saldoInicialInput').addEventListener('input', e=>{ previewSaldoInicial = e.target.value===''? null : parseMoeda(e.target.value); });
+document.getElementById('saldoFinalInput').addEventListener('input', e=>{ previewSaldoFinalExtrato = e.target.value===''? null : parseMoeda(e.target.value); });
 
 function renderPreviewTable(){
   const tbody = document.querySelector('#previewTable tbody');
@@ -643,8 +675,18 @@ document.getElementById('btnConfirmImport').addEventListener('click', async ()=>
     });
   });
   await batch.commit();
-  document.getElementById('importStatus').textContent = '✓ Transações salvas.';
+  if (previewSaldoInicial !== null || previewSaldoFinalExtrato !== null){
+    await db.collection('saldosMensais').doc(mesAtual).set({
+      saldoInicial: previewSaldoInicial,
+      saldoFinalExtrato: previewSaldoFinalExtrato,
+      atualizadoEm: Date.now()
+    }, {merge:true});
+  }
+  document.getElementById('importStatus').textContent = '✓ Transações e saldo salvos.';
   previewRows = [];
+  previewSaldoInicial = null; previewSaldoFinalExtrato = null;
+  document.getElementById('saldoInicialInput').value = '';
+  document.getElementById('saldoFinalInput').value = '';
   renderPreviewTable();
   loadMesData();
 });
@@ -875,12 +917,28 @@ function renderComprovantes(){
 }
 
 /* ===================== CARREGAR DADOS DO MÊS ===================== */
+let saldoMesCache = { saldoInicial: null, saldoFinalExtrato: null };
+let saldoMesAnteriorCache = { saldoFinalExtrato: null };
+
+function mesAnterior(mes){
+  const [ano, m] = mes.split('-').map(Number);
+  const d = new Date(ano, m-2, 1); // m-1 é o mês atual (0-indexado), -1 de novo pra pegar o anterior
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+}
+
 async function loadMesData(){
   if (!firebaseReady) return;
   const tSnap = await db.collection('transacoes').where('mes','==',mesAtual).get();
   transacoesCache = tSnap.docs.map(d=>({id:d.id, ...d.data()}));
   const cSnap = await db.collection('comprovantes').where('mes','==',mesAtual).get();
   comprovantesCache = cSnap.docs.map(d=>({id:d.id, ...d.data()}));
+
+  const saldoDoc = await db.collection('saldosMensais').doc(mesAtual).get();
+  saldoMesCache = saldoDoc.exists ? saldoDoc.data() : { saldoInicial: null, saldoFinalExtrato: null };
+
+  const saldoAnteriorDoc = await db.collection('saldosMensais').doc(mesAnterior(mesAtual)).get();
+  saldoMesAnteriorCache = saldoAnteriorDoc.exists ? saldoAnteriorDoc.data() : { saldoFinalExtrato: null };
+
   renderComprovantes();
   renderConciliacao();
   renderDashboard();
@@ -961,7 +1019,45 @@ document.getElementById('btnJustificar').addEventListener('click', async ()=>{
 });
 
 /* ===================== DASHBOARD ===================== */
+function calcularBalancoMes(){
+  let saldoInicial = saldoMesCache.saldoInicial;
+  let saldoInicialOrigem = 'informado no extrato deste mês';
+  if (saldoInicial === null || saldoInicial === undefined){
+    if (saldoMesAnteriorCache.saldoFinalExtrato !== null && saldoMesAnteriorCache.saldoFinalExtrato !== undefined){
+      saldoInicial = saldoMesAnteriorCache.saldoFinalExtrato;
+      saldoInicialOrigem = 'estimado a partir do saldo final do mês anterior';
+    } else {
+      saldoInicial = null;
+      saldoInicialOrigem = 'não informado';
+    }
+  }
+  const totalEntradas = transacoesCache.filter(t=>t.valor>0).reduce((s,t)=>s+t.valor,0);
+  const totalSaidas = transacoesCache.filter(t=>t.valor<0).reduce((s,t)=>s+Math.abs(t.valor),0);
+  const saldoFinalCalculado = (saldoInicial!==null) ? saldoInicial + totalEntradas - totalSaidas : null;
+  const saldoFinalExtrato = (saldoMesCache.saldoFinalExtrato ?? null);
+  const divergencia = (saldoFinalCalculado!==null && saldoFinalExtrato!==null) ? Math.abs(saldoFinalCalculado - saldoFinalExtrato) : null;
+  const saldoASeguir = saldoFinalExtrato !== null ? saldoFinalExtrato : saldoFinalCalculado;
+  return { saldoInicial, saldoInicialOrigem, totalEntradas, totalSaidas, saldoFinalCalculado, saldoFinalExtrato, divergencia, saldoASeguir };
+}
+
 function renderDashboard(){
+  // ---- Balanço do mês ----
+  const b = calcularBalancoMes();
+
+  document.getElementById('balancoMes').innerHTML = `
+    <table style="width:100%;">
+      <tr><td class="hint">Saldo inicial do mês</td><td class="mono" style="text-align:right;">${b.saldoInicial!==null?fmtMoeda(b.saldoInicial):'—'}</td></tr>
+      <tr><td class="hint" style="padding-left:14px;">(+) Total de entradas</td><td class="mono" style="text-align:right; color:var(--ok);">${fmtMoeda(b.totalEntradas)}</td></tr>
+      <tr><td class="hint" style="padding-left:14px;">(−) Total de saídas</td><td class="mono" style="text-align:right; color:var(--miss);">${fmtMoeda(b.totalSaidas)}</td></tr>
+      <tr style="border-top:2px solid var(--ink);"><td style="font-weight:600; padding-top:6px;">= Saldo final calculado</td><td class="mono" style="text-align:right; font-weight:600; padding-top:6px;">${b.saldoFinalCalculado!==null?fmtMoeda(b.saldoFinalCalculado):'—'}</td></tr>
+      <tr><td class="hint">Saldo final conforme extrato</td><td class="mono" style="text-align:right;">${b.saldoFinalExtrato!==null?fmtMoeda(b.saldoFinalExtrato):'—'}</td></tr>
+    </table>
+    <p class="hint" style="margin-top:8px;">Saldo inicial: ${b.saldoInicialOrigem}.</p>
+    ${b.divergencia!==null && b.divergencia>0.01 ? `<p class="hint" style="color:var(--miss); font-weight:600;">⚠ Diferença de ${fmtMoeda(b.divergencia)} entre o saldo calculado e o saldo do extrato — pode haver alguma transação faltando ou duplicada na importação.</p>` : ''}
+    <p class="hint" style="margin-top:8px;"><strong>Saldo disponível para o mês seguinte: ${b.saldoASeguir!==null?fmtMoeda(b.saldoASeguir):'—'}</strong></p>
+  `;
+
+  // ---- Resumo de conciliação ----
   const total = transacoesCache.length;
   const conciliadas = transacoesCache.filter(t=>t.status==='conciliado').length;
   const semComprovante = transacoesCache.filter(t=>t.status==='sem_comprovante').length;
@@ -990,6 +1086,22 @@ function renderDashboard(){
 /* ===================== EXPORTAR ===================== */
 document.getElementById('btnExportXlsx').addEventListener('click', ()=>{
   if (!transacoesCache.length) return alert('Sem transações neste mês.');
+  const b = calcularBalancoMes();
+  const balancoData = [
+    ['Balanço do mês', mesAtual],
+    [],
+    ['Saldo inicial do mês', b.saldoInicial],
+    ['(+) Total de entradas', b.totalEntradas],
+    ['(−) Total de saídas', b.totalSaidas],
+    ['= Saldo final calculado', b.saldoFinalCalculado],
+    ['Saldo final conforme extrato', b.saldoFinalExtrato],
+    ['Saldo disponível para o mês seguinte', b.saldoASeguir],
+    [],
+    ['Observação sobre saldo inicial', b.saldoInicialOrigem],
+    ...(b.divergencia!==null && b.divergencia>0.01 ? [['Atenção', `Diferença de ${fmtMoeda(b.divergencia)} entre o saldo calculado e o saldo do extrato`]] : [])
+  ];
+  const wsBalanco = XLSX.utils.aoa_to_sheet(balancoData);
+
   const data = transacoesCache
     .sort((a,b)=>a.data.localeCompare(b.data))
     .map(t=>({
@@ -999,7 +1111,8 @@ document.getElementById('btnExportXlsx').addEventListener('click', ()=>{
     }));
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, mesAtual);
+  XLSX.utils.book_append_sheet(wb, wsBalanco, 'Balanço');
+  XLSX.utils.book_append_sheet(wb, ws, 'Transações');
   XLSX.writeFile(wb, `prestacao_contas_${mesAtual}.xlsx`);
   document.getElementById('exportStatus').textContent = '✓ Planilha baixada.';
 });
