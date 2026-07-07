@@ -10,7 +10,6 @@
 <!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
 
 <!-- SheetJS (export xlsx) -->
@@ -146,8 +145,8 @@
   <section class="screen active" id="screen-config">
     <div class="card">
       <h2>Configuração do Firebase</h2>
-      <p class="hint">Cole aqui a config do seu projeto Firebase (Firestore + Storage + <strong>Authentication com e-mail/senha habilitado</strong>). Isso fica salvo só no seu navegador (localStorage) — não sobe pra lugar nenhum.</p>
-      <textarea id="fbConfigInput" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
+      <p class="hint">Cole aqui a config do seu projeto Firebase (Firestore + <strong>Authentication com e-mail/senha habilitado</strong>). Pode colar o trecho igual o Firebase te deu, com <code>const firebaseConfig = {...}</code> e tudo — o app entende. Isso fica salvo só no seu navegador (localStorage) — não sobe pra lugar nenhum.</p>
+      <textarea id="fbConfigInput" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","messagingSenderId":"...","appId":"..."}'></textarea>
       <div class="row" style="margin-top:10px;">
         <button class="btn" id="btnSaveConfig">Salvar e conectar</button>
         <span id="configStatus" class="hint"></span>
@@ -163,16 +162,7 @@ service cloud.firestore {
     }
   }
 }</pre>
-      E em <em>Storage → Regras</em>:
-      <pre style="white-space:pre-wrap; font-size:.72rem; background:#fff; padding:8px; border-radius:4px; margin-top:6px;">rules_version = '2';
-service firebase.storage {
-  match /b/{bucket}/o {
-    match /{allPaths=**} {
-      allow read, write: if request.auth != null;
-    }
-  }
-}</pre>
-      Sem isso, o login aparece na tela mas os dados continuam abertos pra qualquer um com a config do projeto.
+      Sem isso, o login aparece na tela mas os dados continuam abertos pra qualquer um com a config do projeto. (O Storage não é mais usado neste app — as fotos ficam guardadas direto no Firestore, então não precisa mexer em regras de Storage.)
     </div>
     <div class="card">
       <h2>Chave do Gemini</h2>
@@ -310,7 +300,7 @@ service firebase.storage {
 
 <script>
 /* ===================== ESTADO / FIREBASE ===================== */
-let db = null, storage = null, auth = null, firebaseReady = false;
+let db = null, auth = null, firebaseReady = false;
 let mesAtual = mesAtualDefault();
 let transacoesCache = [];
 let comprovantesCache = [];
@@ -329,17 +319,35 @@ async function fileToBase64(file){
   });
 }
 
-// Reduz o tamanho da foto antes de enviar (economiza banda e fica dentro do limite do Vercel).
-async function compressImage(file, maxWidth=1600, quality=0.85){
+// Reduz o tamanho da foto até caber com folga num documento do Firestore (limite de 1MB por documento).
+// A imagem vai ser guardada como base64 dentro do próprio documento, então o alvo é conservador (~550KB).
+async function compressImage(file, maxWidth=1400, quality=0.8){
   if (!file.type.startsWith('image/')) return file; // não mexe em PDF
-  const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, maxWidth / bitmap.width);
-  const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale);
-  const canvas = document.createElement('canvas');
-  canvas.width = w; canvas.height = h;
-  canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
-  const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
+  const TARGET_BYTES = 550 * 1024;
+  let currentQuality = quality, currentWidth = maxWidth, blob;
+  for (let attempt=0; attempt<6; attempt++){
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, currentWidth / bitmap.width);
+    const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+    blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', currentQuality));
+    if (blob.size <= TARGET_BYTES || attempt === 5) break;
+    currentQuality = Math.max(0.35, currentQuality - 0.15);
+    currentWidth = Math.max(700, currentWidth - 200);
+  }
   return new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' });
+}
+
+// Converte o arquivo (já comprimido) numa data URL completa, pra guardar direto no documento do Firestore.
+async function fileToDataURL(file){
+  return new Promise((resolve, reject)=>{
+    const r = new FileReader();
+    r.onload = ()=> resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
 }
 
 // Chama a função serverless /api/gemini (a chave real fica só no Vercel, nunca no navegador).
@@ -421,11 +429,24 @@ populateMesSelect();
 document.getElementById('previewMes').textContent = mesAtual;
 
 /* ===================== FIREBASE CONFIG + AUTH ===================== */
+
+// Aceita tanto JSON puro quanto o trecho de código que o próprio Firebase Console fornece
+// (com "const firebaseConfig = {...}", comentários, chaves sem aspas etc).
+function parseFirebaseConfigInput(raw){
+  try{ return JSON.parse(raw); }catch(e){ /* não é JSON puro, tenta o modo abaixo */ }
+  const match = raw.match(/\{[\s\S]*\}/); // pega só o trecho entre a primeira { e a última }
+  if (match){
+    try{
+      return Function('"use strict"; return (' + match[0] + ');')();
+    }catch(e){ /* segue pro erro final */ }
+  }
+  throw new Error('Não consegui reconhecer a configuração colada.');
+}
+
 function initFirebaseFromConfig(cfg){
   try{
     if (!firebase.apps.length) firebase.initializeApp(cfg);
     db = firebase.firestore();
-    storage = firebase.storage();
     auth = firebase.auth();
     firebaseReady = true;
     document.getElementById('configStatus').textContent = '✓ Conectado.';
@@ -437,11 +458,11 @@ function initFirebaseFromConfig(cfg){
 document.getElementById('btnSaveConfig').addEventListener('click', ()=>{
   const raw = document.getElementById('fbConfigInput').value.trim();
   try{
-    const cfg = JSON.parse(raw);
+    const cfg = parseFirebaseConfigInput(raw);
     localStorage.setItem('fbConfig', JSON.stringify(cfg));
     initFirebaseFromConfig(cfg);
   }catch(e){
-    document.getElementById('configStatus').textContent = 'JSON inválido.';
+    document.getElementById('configStatus').textContent = 'Não entendi essa configuração — cole o trecho igual o Firebase te deu, com o firebaseConfig completo.';
   }
 });
 (function tryLoadSavedConfig(){
@@ -668,20 +689,15 @@ document.getElementById('btnSaveAllComp').addEventListener('click', async ()=>{
     const ok = confirm(`Encontrei ${duplicatas.length} possível(is) duplicata(s) (mesmo valor e data de algo já existente). Quer salvar assim mesmo?`);
     if (!ok) return;
   }
-  document.getElementById('compSaveStatus').textContent = 'Enviando fotos e salvando...';
-  const uploadedUrlByFileIdx = {};
+  document.getElementById('compSaveStatus').textContent = 'Salvando...';
+  const dataUrlByFileIdx = {};
   for (const r of compReview){
     if (!r.data || isNaN(r.valor)) continue;
-    if (!(r.fileIdx in uploadedUrlByFileIdx)){
-      const file = compFiles[r.fileIdx];
-      const mes = mesFromISO(r.data);
-      const path = `comprovantes/${mes}/${Date.now()}_${file.name}`;
-      const ref = storage.ref().child(path);
-      await ref.put(file);
-      uploadedUrlByFileIdx[r.fileIdx] = await ref.getDownloadURL();
+    if (!(r.fileIdx in dataUrlByFileIdx)){
+      dataUrlByFileIdx[r.fileIdx] = await fileToDataURL(compFiles[r.fileIdx]);
     }
     await db.collection('comprovantes').add({
-      imageUrl: uploadedUrlByFileIdx[r.fileIdx],
+      imageUrl: dataUrlByFileIdx[r.fileIdx], // data URL (base64), guardada direto no documento
       data: r.data, valor: r.valor, descricao: r.descricao,
       mes: mesFromISO(r.data), status: 'pendente', transacaoId: null, criadoEm: Date.now()
     });
