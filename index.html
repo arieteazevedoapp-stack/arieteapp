@@ -295,7 +295,7 @@ service cloud.firestore {
       <h3>Todas as transações do mês</h3>
       <div style="overflow-x:auto;">
         <table id="dashTable">
-          <thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Status</th></tr></thead>
+          <thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Status</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1009,9 +1009,23 @@ document.getElementById('btnVincular').addEventListener('click', async ()=>{
   selectedTransId = null; selectedCompId = null;
   loadMesData();
 });
+function sugerirJustificativa(t){
+  const desc = (t?.descricao || '').toLowerCase();
+  const valorAbs = Math.abs(t?.valor || 0);
+  if (desc.startsWith('pix enviado')){
+    return `Pix de valor reduzido (${fmtMoeda(valorAbs)}) referente a despesa pessoal do dia a dia da curatelada (ex: convívio social/familiar), compatível com seu padrão habitual de gastos. Beneficiário identificado na própria descrição da transação.`;
+  }
+  if (desc.includes('compra cartão de débito') || t?.categoria === 'Alimentação/Mercado'){
+    return `Compra de pequeno valor (${fmtMoeda(valorAbs)}) em comércio/feirante que não emite comprovante fiscal (venda informal). Despesa compatível com o consumo mensal habitual da curatelada.`;
+  }
+  return `Despesa de pequeno valor (${fmtMoeda(valorAbs)}) sem comprovante disponível — [descreva aqui o motivo específico].`;
+}
+
 document.getElementById('btnJustificar').addEventListener('click', async ()=>{
   if (!selectedTransId) return;
-  const obs = prompt('Justificativa para a ausência de comprovante:');
+  const t = transacoesCache.find(tr=>tr.id===selectedTransId);
+  const sugestao = sugerirJustificativa(t);
+  const obs = prompt('Justificativa para a ausência de comprovante (edite como quiser):', sugestao);
   if (obs===null) return;
   await db.collection('transacoes').doc(selectedTransId).update({status:'sem_comprovante', observacao:obs});
   selectedTransId = null;
@@ -1080,7 +1094,23 @@ function renderDashboard(){
       <td>${t.categoria || 'Outros'}</td>
       <td class="mono">${fmtMoeda(t.valor)}</td>
       <td><span class="tag ${t.status==='conciliado'?'ok':(t.status==='sem_comprovante'?'pend':'miss')}">${t.status}</span></td>
-    </tr>`).join('') || '<tr><td colspan="5" class="empty">Sem transações neste mês.</td></tr>';
+      <td><button class="btn ghost" data-del-trans="${t.id}" style="padding:4px 8px; color:var(--miss);">Excluir</button></td>
+    </tr>`).join('') || '<tr><td colspan="6" class="empty">Sem transações neste mês.</td></tr>';
+
+  tbody.querySelectorAll('[data-del-trans]').forEach(b=>{
+    b.addEventListener('click', async ()=>{
+      const id = b.dataset.delTrans;
+      const trans = transacoesCache.find(t=>t.id===id);
+      const ok = confirm(`Excluir a transação "${trans?.descricao}" (${trans?fmtMoeda(trans.valor):''})? Essa ação não pode ser desfeita.`);
+      if (!ok) return;
+      // Se estava conciliada com um comprovante, devolve o comprovante pro status pendente.
+      if (trans && trans.status==='conciliado' && trans.comprovanteId){
+        await db.collection('comprovantes').doc(trans.comprovanteId).update({ status:'pendente', transacaoId:null });
+      }
+      await db.collection('transacoes').doc(id).delete();
+      loadMesData();
+    });
+  });
 }
 
 /* ===================== EXPORTAR ===================== */
