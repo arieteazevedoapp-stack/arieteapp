@@ -19,8 +19,10 @@ if (!admin.apps.length) {
   }
 }
 
-const GEMINI_MODEL_PRIMARY = 'gemini-3.5-flash';
-const GEMINI_MODEL_FALLBACK = 'gemini-2.5-flash'; // usado só se o principal continuar sobrecarregado
+// Lista de modelos com visão (foto/PDF), em ordem de preferência. Cada um tem cota própria e
+// separada dos outros — se um bater o limite (429/503), a função tenta o próximo da lista antes
+// de esperar. Isso multiplica a capacidade efetiva em vez de depender de um único modelo.
+const MODELOS_VISAO = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite'];
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '*';
 
 module.exports = async (req, res) => {
@@ -107,20 +109,20 @@ module.exports = async (req, res) => {
   }
 
   try {
-    // 1ª tentativa: modelo principal
-    let r1 = await chamarGemini(GEMINI_MODEL_PRIMARY);
-    if (r1.status !== 429 && r1.status !== 503) return res.status(r1.status).json(r1.data);
+    const resultados = [];
+    // Tenta cada modelo da lista em ordem — cada um tem cota própria e separada.
+    for (const modelo of MODELOS_VISAO){
+      const r = await chamarGemini(modelo);
+      if (r.status !== 429 && r.status !== 503) return res.status(r.status).json(r.data);
+      resultados.push(r);
+    }
 
-    // 2ª tentativa: modelo alternativo, na hora — tem cota própria, separada da do principal
-    let r2 = await chamarGemini(GEMINI_MODEL_FALLBACK);
-    if (r2.status !== 429 && r2.status !== 503) return res.status(r2.status).json(r2.data);
-
-    // Se os dois modelos estão no limite, agora sim espera o tempo pedido e tenta o principal mais uma vez
-    const base = (r1.status === 429) ? r1.data : r2.data;
+    // Se TODOS os modelos estão no limite, agora sim espera o tempo pedido e tenta o principal mais uma vez
+    const base = resultados.find(r => r.status === 429)?.data || resultados[0].data;
     const segundos = Math.min(extrairEsperaSegundos(base) + 1, 55);
     await espera(segundos * 1000);
-    let r3 = await chamarGemini(GEMINI_MODEL_PRIMARY);
-    return res.status(r3.status).json(r3.data);
+    const rFinal = await chamarGemini(MODELOS_VISAO[0]);
+    return res.status(rFinal.status).json(rFinal.data);
   } catch (e) {
     return res.status(502).json({ error: 'Falha ao chamar o Gemini: ' + e.message });
   }
