@@ -655,19 +655,38 @@ document.getElementById('btnAddRow').addEventListener('click', ()=>{
   renderPreviewTable();
 });
 
+function garantirOpcaoMes(mes){
+  const sel = document.getElementById('mesSelect');
+  if (![...sel.options].some(o=>o.value===mes)){
+    const [ano,m] = mes.split('-').map(Number);
+    const dt = new Date(ano, m-1, 1);
+    const opt = document.createElement('option');
+    opt.value = mes;
+    opt.textContent = dt.toLocaleDateString('pt-BR',{month:'long', year:'numeric'});
+    sel.appendChild(opt);
+  }
+}
+
 document.getElementById('btnConfirmImport').addEventListener('click', async ()=>{
   if (!firebaseReady) return alert('Configure o Firebase primeiro.');
   if (!previewRows.length) return alert('Nada para importar.');
   document.getElementById('importStatus').textContent = 'Salvando...';
   const batch = db.batch();
-  previewRows.forEach(r=>{
-    if (!r.data || isNaN(r.valor)) return;
+  const mesesSalvos = new Set();
+  const linhasPuladas = [];
+  previewRows.forEach((r, idx)=>{
+    if (!r.data || isNaN(r.valor)){
+      linhasPuladas.push(`linha ${idx+1} (${r.descricao || 'sem descrição'}) — ${!r.data ? 'data vazia/inválida' : 'valor inválido'}`);
+      return;
+    }
     const categoria = r.categoria || 'Outros';
     const dispensado = CATEGORIAS_SEM_COMPROVANTE.includes(categoria);
+    const mes = mesFromISO(r.data);
+    mesesSalvos.add(mes);
     const ref = db.collection('transacoes').doc();
     batch.set(ref, {
       data: r.data, descricao: r.descricao, valor: r.valor, categoria,
-      mes: mesFromISO(r.data),
+      mes,
       status: dispensado ? 'sem_comprovante' : 'pendente',
       comprovanteId: null,
       observacao: dispensado ? 'Lançamento automático do banco — dispensa comprovante' : '',
@@ -682,7 +701,23 @@ document.getElementById('btnConfirmImport').addEventListener('click', async ()=>
       atualizadoEm: Date.now()
     }, {merge:true});
   }
-  document.getElementById('importStatus').textContent = '✓ Transações e saldo salvos.';
+
+  if (linhasPuladas.length){
+    alert(`Atenção: ${linhasPuladas.length} linha(s) NÃO foram salvas, por dado inválido:\n\n${linhasPuladas.join('\n')}\n\nCorrija e importe essas linhas de novo se precisar.`);
+  }
+
+  // Troca automaticamente o mês selecionado pro mês que acabou de ser importado, pra você já ver na hora.
+  if (mesesSalvos.size === 1){
+    const novoMes = [...mesesSalvos][0];
+    garantirOpcaoMes(novoMes);
+    mesAtual = novoMes;
+    document.getElementById('mesSelect').value = novoMes;
+  } else if (mesesSalvos.size > 1){
+    alert(`As transações importadas caem em ${mesesSalvos.size} meses diferentes (${[...mesesSalvos].join(', ')}). Ficando no mês ${mesAtual} — troque o seletor no topo pra ver os outros meses.`);
+  }
+
+  document.getElementById('importStatus').textContent =
+    `✓ ${previewRows.length - linhasPuladas.length} transação(ões) salva(s)${linhasPuladas.length ? ` (${linhasPuladas.length} pulada(s), veja o aviso acima)` : ''}.`;
   previewRows = [];
   previewSaldoInicial = null; previewSaldoFinalExtrato = null;
   document.getElementById('saldoInicialInput').value = '';
