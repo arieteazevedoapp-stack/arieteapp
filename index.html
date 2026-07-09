@@ -571,7 +571,9 @@ const CATEGORIAS = [
 // não são gastos/pagamentos que a pessoa fez — são cobranças ou créditos do banco em si).
 const CATEGORIAS_SEM_COMPROVANTE = ['Rendimento/Aplicação', 'Tarifa/Taxa bancária'];
 
-const PROMPT_EXTRATO = `Você recebe um extrato bancário em PDF. Extraia:
+function gerarPromptExtrato(){
+  const anoRef = mesAtual.slice(0,4);
+  return `Você recebe um extrato bancário em PDF. Extraia:
 1. O saldo anterior/inicial do período (o saldo que a conta tinha no início do extrato) e o saldo final do período, se estiverem indicados no documento.
 2. TODAS as transações do período (não conte saldo anterior/final como transação).
 Retorne SOMENTE um objeto JSON, sem markdown, neste formato exato:
@@ -579,10 +581,12 @@ Retorne SOMENTE um objeto JSON, sem markdown, neste formato exato:
 Regras:
 - valor negativo para saídas/débitos/pagamentos, valor positivo para entradas/créditos/depósitos.
 - Datas sempre no formato dd/mm/aaaa.
+- ATENÇÃO ESPECIAL AO ANO: leia o ano de cada data com cuidado redobrado, dígito por dígito. O extrato provavelmente é do ano ${anoRef} — se você ler um ano diferente, releia antes de responder, e só use um ano diferente de ${anoRef} se tiver certeza absoluta de que é isso que está escrito no documento.
 - Para transações de Pix (enviado ou recebido), SEMPRE inclua o nome completo do beneficiário/pagador exatamente como aparece no extrato na descrição (ex: "Pix enviado - João da Silva"), nunca generalize como apenas "PIX ENVIADO" se o nome estiver disponível no documento.
 - Classifique como "Tarifa/Taxa bancária" qualquer cobrança do próprio banco: tarifa de manutenção/pacote de serviços, IOF, taxas de operação, anuidade de cartão, juros/multa cobrados pelo banco, e afins — são lançamentos do banco, não pagamentos feitos pela pessoa.
 - Se não encontrar saldo anterior ou saldo final no documento, use null nesses campos (não invente valor).
 Para "categoria", escolha SEMPRE uma destas opções exatas (a que melhor combinar com a descrição): ${CATEGORIAS.join(', ')}.`;
+}
 
 let previewSaldoInicial = null;
 let previewSaldoFinalExtrato = null;
@@ -592,7 +596,7 @@ document.getElementById('btnParsePdf').addEventListener('click', async ()=>{
   if (!file) return alert('Escolha um arquivo PDF.');
   document.getElementById('importStatus').textContent = 'Lendo PDF com o Gemini...';
   try{
-    const result = await callGeminiExtract(file, PROMPT_EXTRATO);
+    const result = await callGeminiExtract(file, gerarPromptExtrato());
     const transacoesLidas = Array.isArray(result) ? result : (result.transacoes || []);
     previewSaldoInicial = (!Array.isArray(result) && typeof result.saldo_inicial === 'number') ? result.saldo_inicial : null;
     previewSaldoFinalExtrato = (!Array.isArray(result) && typeof result.saldo_final === 'number') ? result.saldo_final : null;
@@ -624,8 +628,12 @@ function renderPreviewTable(){
       `<option value="${c}" ${r.categoria===c?'selected':''}>${c}</option>`
     ).join('');
     const dispensado = CATEGORIAS_SEM_COMPROVANTE.includes(r.categoria);
+    const mesDiferente = r.data && mesFromISO(r.data) !== mesAtual;
     tr.innerHTML = `
-      <td><input type="date" value="${r.data||''}" data-idx="${idx}" data-field="data" style="width:130px;"></td>
+      <td>
+        <input type="date" value="${r.data||''}" data-idx="${idx}" data-field="data" style="width:130px;">
+        <div class="hint" data-mes-hint-extrato="${idx}" style="color:var(--pend); font-weight:600; margin-top:3px; ${mesDiferente?'':'display:none;'}">⚠ fora do mês selecionado (${mesAtual}) — confira o ano</div>
+      </td>
       <td><input type="text" value="${r.descricao}" data-idx="${idx}" data-field="descricao" style="width:100%;"></td>
       <td><input type="text" class="mono" value="${r.valor}" data-idx="${idx}" data-field="valor" style="width:100px;"></td>
       <td>
@@ -642,6 +650,10 @@ function renderPreviewTable(){
       if (field === 'categoria'){
         const hintEl = tbody.querySelector(`[data-dispensa-hint="${idx}"]`);
         if (hintEl) hintEl.style.display = CATEGORIAS_SEM_COMPROVANTE.includes(e.target.value) ? '' : 'none';
+      }
+      if (field === 'data'){
+        const mesHintEl = tbody.querySelector(`[data-mes-hint-extrato="${idx}"]`);
+        if (mesHintEl) mesHintEl.style.display = (e.target.value && mesFromISO(e.target.value) !== mesAtual) ? '' : 'none';
       }
     });
   });
@@ -670,6 +682,14 @@ function garantirOpcaoMes(mes){
 document.getElementById('btnConfirmImport').addEventListener('click', async ()=>{
   if (!firebaseReady) return alert('Configure o Firebase primeiro.');
   if (!previewRows.length) return alert('Nada para importar.');
+
+  const foraDoMes = previewRows.filter(r => r.data && mesFromISO(r.data) !== mesAtual);
+  if (foraDoMes.length){
+    const meses = [...new Set(foraDoMes.map(r=>mesFromISO(r.data)))].join(', ');
+    const ok = confirm(`${foraDoMes.length} linha(s) têm data fora do mês selecionado (${mesAtual}) — vão pra: ${meses}.\n\nSe você não importou de propósito outro mês, isso costuma ser erro de leitura do ANO pelo Gemini. Confira as datas na tabela antes de continuar.\n\nSalvar assim mesmo?`);
+    if (!ok) return;
+  }
+
   document.getElementById('importStatus').textContent = 'Salvando...';
   const batch = db.batch();
   const mesesSalvos = new Set();
