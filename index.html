@@ -172,6 +172,56 @@ service cloud.firestore {
       <p class="hint">A chave do Gemini agora fica só no servidor (variável de ambiente no Vercel) — o app nunca vê nem envia essa chave. Ele chama <code>/api/gemini</code>, que confere seu login e repassa a chamada. Não precisa configurar nada aqui.</p>
     </div>
     <div class="card">
+      <h2>Identificação do processo</h2>
+      <p class="hint">Esses dados são fixos (não mudam mês a mês) e entram automaticamente no cabeçalho da planilha padrão exigida pelo juiz. Preencha uma vez — fica salvo pra qualquer pessoa logada.</p>
+      <label>Tribunal / Comarca / Vara</label>
+      <input type="text" id="procTribunal" style="width:100%; margin-bottom:10px;" placeholder="Tribunal de Justiça do Estado de São Paulo - Comarca de Jacareí - 2ª Vara de Família e Sucessões">
+      <label>Número do processo</label>
+      <input type="text" id="procNumero" style="width:100%; margin-bottom:14px;" placeholder="0000000-00.0000.0.00.0000">
+
+      <h3 style="margin-top:6px;">Responsável 01</h3>
+      <div class="col2">
+        <div><label>Nome</label><input type="text" id="resp1Nome" style="width:100%;"></div>
+        <div><label>CPF</label><input type="text" id="resp1Cpf" style="width:100%;"></div>
+      </div>
+      <div class="col2" style="margin-top:8px;">
+        <div><label>RG</label><input type="text" id="resp1Rg" style="width:100%;"></div>
+        <div><label>Endereço</label><input type="text" id="resp1Endereco" style="width:100%;"></div>
+      </div>
+
+      <h3 style="margin-top:16px;">Responsável 02</h3>
+      <div class="col2">
+        <div><label>Nome</label><input type="text" id="resp2Nome" style="width:100%;"></div>
+        <div><label>CPF</label><input type="text" id="resp2Cpf" style="width:100%;"></div>
+      </div>
+      <div class="col2" style="margin-top:8px;">
+        <div><label>RG</label><input type="text" id="resp2Rg" style="width:100%;"></div>
+        <div><label>Endereço</label><input type="text" id="resp2Endereco" style="width:100%;"></div>
+      </div>
+
+      <h3 style="margin-top:16px;">Tutelado/Curatelado</h3>
+      <div class="col2">
+        <div><label>Nome</label><input type="text" id="tutNome" style="width:100%;"></div>
+        <div><label>CPF</label><input type="text" id="tutCpf" style="width:100%;"></div>
+      </div>
+      <div class="col2" style="margin-top:8px;">
+        <div><label>RG</label><input type="text" id="tutRg" style="width:100%;"></div>
+        <div><label>Endereço</label><input type="text" id="tutEndereco" style="width:100%;"></div>
+      </div>
+
+      <h3 style="margin-top:16px;">Conta bancária</h3>
+      <div class="col2">
+        <div><label>Banco</label><input type="text" id="contaBanco" style="width:100%;" placeholder="Banco Itaú S/A"></div>
+        <div><label>Agência</label><input type="text" id="contaAgencia" style="width:100%;"></div>
+      </div>
+      <div style="margin-top:8px;"><label>Conta corrente</label><input type="text" id="contaNumero" style="width:100%;"></div>
+
+      <div class="row" style="margin-top:14px;">
+        <button class="btn" id="btnSalvarProcesso">Salvar identificação</button>
+        <span id="processoStatus" class="hint"></span>
+      </div>
+    </div>
+    <div class="card">
       <h3>Como funciona</h3>
       <ol class="hint" style="padding-left:18px;">
         <li>Cada pessoa autorizada cria sua conta (e-mail/senha) na tela de login, uma única vez.</li>
@@ -295,7 +345,7 @@ service cloud.firestore {
       <h3>Todas as transações do mês</h3>
       <div style="overflow-x:auto;">
         <table id="dashTable">
-          <thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Nº Doc</th><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Status</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -312,6 +362,14 @@ service cloud.firestore {
         <button class="btn secondary" id="btnExportZip">Baixar comprovantes (.zip)</button>
       </div>
       <span id="exportStatus" class="hint"></span>
+    </div>
+    <div class="card">
+      <h2>Planilha no modelo padrão do processo</h2>
+      <p class="hint">Segue o layout exigido pelo juiz (cabeçalho com identificação das partes, colunas Datas/Nº Doctos/Tipo/Lançamento/Créditos/Débitos/Saldos, saldo do dia e saldo final do mês). Preencha a "Identificação do processo" na aba Config antes de usar.</p>
+      <div class="row">
+        <button class="btn" id="btnExportModeloJudicial">Baixar planilha padrão (modelo do juiz)</button>
+      </div>
+      <span id="exportModeloStatus" class="hint"></span>
     </div>
   </section>
 
@@ -515,12 +573,47 @@ function setupAuthListener(){
       document.getElementById('loginGate').style.display = 'none';
       document.getElementById('appContent').style.display = 'block';
       loadMesData();
+      loadIdentificacaoProcesso();
     } else {
       document.getElementById('loginGate').style.display = 'flex';
       document.getElementById('appContent').style.display = 'none';
     }
   });
 }
+
+/* --- Identificação do processo (dados fixos, compartilhados entre usuários) --- */
+const CAMPOS_PROCESSO = ['procTribunal','procNumero','resp1Nome','resp1Cpf','resp1Rg','resp1Endereco',
+  'resp2Nome','resp2Cpf','resp2Rg','resp2Endereco','tutNome','tutCpf','tutRg','tutEndereco',
+  'contaBanco','contaAgencia','contaNumero'];
+
+async function loadIdentificacaoProcesso(){
+  try{
+    const doc = await db.collection('config').doc('processo').get();
+    if (doc.exists){
+      const dados = doc.data();
+      CAMPOS_PROCESSO.forEach(campo=>{
+        const el = document.getElementById(campo);
+        if (el && dados[campo] !== undefined) el.value = dados[campo];
+      });
+    }
+  }catch(e){
+    console.warn('Não consegui carregar identificação do processo:', e.message);
+  }
+}
+
+document.getElementById('btnSalvarProcesso').addEventListener('click', async ()=>{
+  const dados = {};
+  CAMPOS_PROCESSO.forEach(campo=>{
+    dados[campo] = document.getElementById(campo).value.trim();
+  });
+  try{
+    await db.collection('config').doc('processo').set(dados, {merge:true});
+    document.getElementById('processoStatus').textContent = '✓ Salvo — já vale pra todos os dispositivos logados.';
+  }catch(e){
+    document.getElementById('processoStatus').textContent = 'Erro ao salvar: ' + e.message;
+  }
+});
+
 document.getElementById('loginForm').addEventListener('submit', async (e)=>{
   e.preventDefault();
   const email = document.getElementById('loginEmail').value.trim();
@@ -1088,6 +1181,20 @@ document.getElementById('btnJustificar').addEventListener('click', async ()=>{
 });
 
 /* ===================== DASHBOARD ===================== */
+// Numera sequencialmente, em ordem de data, só as transações que têm comprovante de fato vinculado
+// (status 'conciliado') — combina com a pasta de comprovantes numerados fisicamente.
+function calcularNumerosDocto(){
+  const mapa = {};
+  let contador = 0;
+  [...transacoesCache].sort((a,b)=>a.data.localeCompare(b.data)).forEach(t=>{
+    if (t.status === 'conciliado' && t.comprovanteId){
+      contador++;
+      mapa[t.id] = contador;
+    }
+  });
+  return mapa;
+}
+
 function calcularBalancoMes(){
   let saldoInicial = saldoMesCache.saldoInicial;
   let saldoInicialOrigem = 'informado no extrato deste mês';
@@ -1141,16 +1248,18 @@ function renderDashboard(){
     <div class="stat"><div class="n mono">${pct}%</div><div class="l">documentado</div></div>
   `;
   const tbody = document.querySelector('#dashTable tbody');
+  const numerosDocto = calcularNumerosDocto();
   tbody.innerHTML = transacoesCache
     .sort((a,b)=>a.data.localeCompare(b.data))
     .map(t=>`<tr>
+      <td class="mono">${numerosDocto[t.id] || ''}</td>
       <td class="mono">${t.data}</td>
       <td>${t.descricao}</td>
       <td>${t.categoria || 'Outros'}</td>
       <td class="mono">${fmtMoeda(t.valor)}</td>
       <td><span class="tag ${t.status==='conciliado'?'ok':(t.status==='sem_comprovante'?'pend':'miss')}">${t.status}</span></td>
       <td><button class="btn ghost" data-del-trans="${t.id}" style="padding:4px 8px; color:var(--miss);">Excluir</button></td>
-    </tr>`).join('') || '<tr><td colspan="6" class="empty">Sem transações neste mês.</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="7" class="empty">Sem transações neste mês.</td></tr>';
 
   tbody.querySelectorAll('[data-del-trans]').forEach(b=>{
     b.addEventListener('click', async ()=>{
@@ -1200,6 +1309,92 @@ document.getElementById('btnExportXlsx').addEventListener('click', ()=>{
   XLSX.utils.book_append_sheet(wb, ws, 'Transações');
   XLSX.writeFile(wb, `prestacao_contas_${mesAtual}.xlsx`);
   document.getElementById('exportStatus').textContent = '✓ Planilha baixada.';
+});
+
+function isoParaBR(iso){
+  if (!iso) return '';
+  const [ano,mes,dia] = iso.split('-');
+  return `${dia}/${mes}/${ano}`;
+}
+
+function campoProcesso(id){
+  const el = document.getElementById(id);
+  return el ? el.value.trim() : '';
+}
+
+document.getElementById('btnExportModeloJudicial').addEventListener('click', ()=>{
+  if (!transacoesCache.length) return alert('Sem transações neste mês.');
+
+  const b = calcularBalancoMes();
+  const numerosDocto = calcularNumerosDocto();
+  const dt = new Date(mesAtual + '-01T00:00:00');
+  const mesExtenso = dt.toLocaleDateString('pt-BR', {month:'long', year:'numeric'});
+
+  const tribunal = campoProcesso('procTribunal');
+  const numeroProcesso = campoProcesso('procNumero');
+  const banco = campoProcesso('contaBanco');
+  const agencia = campoProcesso('contaAgencia');
+  const contaNum = campoProcesso('contaNumero');
+
+  const linhas = [];
+  linhas.push([tribunal || 'Tribunal de Justiça — Comarca — Vara']);
+  linhas.push(['Prestação de Contas Referente Processo', numeroProcesso]);
+  linhas.push([]);
+  linhas.push(['1. IDENTIFICAÇÃO RESPONSÁVEL 01']);
+  linhas.push(['Nome:', campoProcesso('resp1Nome')]);
+  linhas.push(['Endereço:', campoProcesso('resp1Endereco')]);
+  linhas.push(['CPF:', campoProcesso('resp1Cpf'), 'RG:', campoProcesso('resp1Rg')]);
+  linhas.push([]);
+  linhas.push(['1. IDENTIFICAÇÃO RESPONSÁVEL 02']);
+  linhas.push(['Nome:', campoProcesso('resp2Nome')]);
+  linhas.push(['Endereço:', campoProcesso('resp2Endereco')]);
+  linhas.push(['CPF:', campoProcesso('resp2Cpf'), 'RG:', campoProcesso('resp2Rg')]);
+  linhas.push([]);
+  linhas.push(['2. IDENTIFICAÇÃO DO TUTELADO/CURATELADO']);
+  linhas.push(['Nome:', campoProcesso('tutNome')]);
+  linhas.push(['Endereço:', campoProcesso('tutEndereco')]);
+  linhas.push(['CPF:', campoProcesso('tutCpf'), 'RG:', campoProcesso('tutRg')]);
+  linhas.push([]);
+  linhas.push([`Banco ${banco} - Agência ${agencia} - Conta Corrente ${contaNum}`, '', '', '', 'Mês/Ano:', mesExtenso]);
+  linhas.push(['Datas','Numero Doctos','Tipo Despesas e Receitas','Lançamento Diários','Créditos R$','Débitos R$','saldos (R$)']);
+
+  const primeiroDia = transacoesCache.slice().sort((a,b)=>a.data.localeCompare(b.data))[0]?.data || (mesAtual+'-01');
+  linhas.push([isoParaBR(primeiroDia), '', '', 'SALDO ANTERIOR', '', '', b.saldoInicial ?? '']);
+
+  let saldoCorrente = b.saldoInicial ?? 0;
+  let totalCreditos = 0, totalDebitos = 0;
+  const porData = {};
+  transacoesCache.forEach(t=>{ (porData[t.data] = porData[t.data] || []).push(t); });
+  const datasOrdenadas = Object.keys(porData).sort();
+
+  datasOrdenadas.forEach(data=>{
+    porData[data].forEach(t=>{
+      const credito = t.valor > 0 ? t.valor : '';
+      const debito = t.valor < 0 ? Math.abs(t.valor) : '';
+      if (t.valor > 0) totalCreditos += t.valor; else totalDebitos += Math.abs(t.valor);
+      saldoCorrente += t.valor;
+      linhas.push([
+        isoParaBR(t.data),
+        numerosDocto[t.id] || '',
+        t.categoria || 'Outros',
+        t.descricao,
+        credito, debito, ''
+      ]);
+    });
+    linhas.push([isoParaBR(data), '', '', 'SALDO TOTAL DISPONÍVEL DIA', '', '', saldoCorrente]);
+  });
+
+  linhas.push(['', '', '', `SALDO TOTAL DE ${mesExtenso.toUpperCase()}`, totalCreditos, totalDebitos, saldoCorrente]);
+  linhas.push([]);
+  linhas.push(['Saldo Finais Disponíveis conforme Extratos', 'Valor R$']);
+  linhas.push([`> Saldo em Conta Corrente no ${banco || 'banco'}`, (b.saldoFinalExtrato ?? saldoCorrente)]);
+
+  const ws = XLSX.utils.aoa_to_sheet(linhas);
+  ws['!cols'] = [{wch:14},{wch:12},{wch:24},{wch:34},{wch:12},{wch:12},{wch:14}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Prestação de Contas');
+  XLSX.writeFile(wb, `prestacao_contas_modelo_${mesAtual}.xlsx`);
+  document.getElementById('exportModeloStatus').textContent = '✓ Planilha no modelo padrão baixada.';
 });
 
 document.getElementById('btnExportZip').addEventListener('click', async ()=>{
