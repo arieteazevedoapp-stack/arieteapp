@@ -433,7 +433,7 @@ async function compressImage(file, maxWidth=1600, quality=0.85){
       // resizeWidth/resizeHeight deixam o navegador já decodificar no tamanho menor — evita
       // precisar materializar a foto inteira em resolução máxima na memória (isso é o que
       // estava travando em celulares com pouca RAM).
-      bitmap = await createImageBitmap(file, { resizeWidth: w, resizeHeight: h, resizeQuality: 'medium' });
+      bitmap = await createImageBitmap(file, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' });
     }catch(e){
       bitmap = await createImageBitmap(file); // navegador não suporta as opções de resize — cai pro modo simples
     }
