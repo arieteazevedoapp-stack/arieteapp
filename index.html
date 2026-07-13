@@ -336,6 +336,17 @@ service cloud.firestore {
     <div class="card">
       <h2>Balanço do mês</h2>
       <div id="balancoMes"></div>
+      <button class="btn ghost" id="btnEditarSaldo" style="margin-top:10px;">Corrigir saldo inicial/final</button>
+      <div id="editarSaldoForm" style="display:none; margin-top:10px;">
+        <div class="col2">
+          <div><label>Saldo inicial do mês (R$)</label><input type="text" id="editSaldoInicial" class="mono" style="width:100%;"></div>
+          <div><label>Saldo final conforme extrato (R$)</label><input type="text" id="editSaldoFinal" class="mono" style="width:100%;"></div>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <button class="btn" id="btnSalvarSaldoEditado">Salvar</button>
+          <button class="btn ghost" id="btnCancelarSaldoEditado">Cancelar</button>
+        </div>
+      </div>
     </div>
     <div class="card">
       <h2>Resumo de conciliação</h2>
@@ -1298,6 +1309,29 @@ function renderDashboard(){
     });
   });
 }
+
+/* --- Editar saldo inicial/final direto pelo Dashboard, sem precisar reimportar o extrato --- */
+document.getElementById('btnEditarSaldo').addEventListener('click', ()=>{
+  const form = document.getElementById('editarSaldoForm');
+  const abrindo = form.style.display === 'none';
+  form.style.display = abrindo ? 'block' : 'none';
+  if (abrindo){
+    document.getElementById('editSaldoInicial').value = saldoMesCache.saldoInicial ?? '';
+    document.getElementById('editSaldoFinal').value = saldoMesCache.saldoFinalExtrato ?? '';
+  }
+});
+document.getElementById('btnCancelarSaldoEditado').addEventListener('click', ()=>{
+  document.getElementById('editarSaldoForm').style.display = 'none';
+});
+document.getElementById('btnSalvarSaldoEditado').addEventListener('click', async ()=>{
+  const iniStr = document.getElementById('editSaldoInicial').value.trim();
+  const finStr = document.getElementById('editSaldoFinal').value.trim();
+  const saldoInicial = iniStr === '' ? null : parseMoeda(iniStr);
+  const saldoFinalExtrato = finStr === '' ? null : parseMoeda(finStr);
+  await db.collection('saldosMensais').doc(mesAtual).set({ saldoInicial, saldoFinalExtrato, atualizadoEm: Date.now() }, {merge:true});
+  document.getElementById('editarSaldoForm').style.display = 'none';
+  loadMesData();
+});
 
 /* ===================== EXPORTAR ===================== */
 document.getElementById('btnExportXlsx').addEventListener('click', ()=>{
