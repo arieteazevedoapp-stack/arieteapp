@@ -423,7 +423,9 @@ async function compressImage(file, maxWidth=2200, quality=0.92){
     const canvas = document.createElement('canvas');
     canvas.width = w; canvas.height = h;
     canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+    bitmap.close(); // libera a memória da imagem decodificada imediatamente (importante em celulares com pouca RAM)
     blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', currentQuality));
+    canvas.width = 0; canvas.height = 0; // libera o buffer do canvas também
     if (blob.size <= TARGET_BYTES || attempt === 6) break;
     currentQuality = Math.max(0.4, currentQuality - 0.1);
     currentWidth = Math.max(900, currentWidth - 250);
@@ -852,8 +854,11 @@ Atenção especial ao ANO da data: leia o ano com cuidado redobrado, não confun
 document.getElementById('comprovanteInput').addEventListener('change', async (e)=>{
   const rawFiles = Array.from(e.target.files || []);
   if (!rawFiles.length) return;
-  document.getElementById('ocrStatus').textContent = `Preparando ${rawFiles.length} foto(s)...`;
-  compFiles = await Promise.all(rawFiles.map(f => compressImage(f)));
+  compFiles = [];
+  for (let i=0;i<rawFiles.length;i++){
+    document.getElementById('ocrStatus').textContent = `Preparando foto ${i+1} de ${rawFiles.length}...`;
+    compFiles.push(await compressImage(rawFiles[i]));
+  }
   e.target.value = ''; // limpa o campo já aqui — os arquivos já estão guardados em compFiles, pronto pra nova seleção
   compReview = [];
   for (let i=0;i<compFiles.length;i++){
