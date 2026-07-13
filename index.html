@@ -409,26 +409,43 @@ function extractErrorMessage(data, status){
 
 // Só reduz a foto quando ela realmente não cabe no limite de 1MB por documento do Firestore.
 // Se o arquivo original já for pequeno o suficiente, usa ele sem nenhuma perda de qualidade.
-async function compressImage(file, maxWidth=2200, quality=0.92){
+async function compressImage(file, maxWidth=1600, quality=0.85){
   if (!file.type.startsWith('image/')) return file; // não mexe em PDF
   const TARGET_BYTES = 650 * 1024; // deixa folga segura sob o 1MB do Firestore depois da codificação em base64
 
   if (file.size <= TARGET_BYTES) return file; // já cabe — não recomprime, preserva a qualidade original
 
-  let currentQuality = quality, currentWidth = maxWidth, blob;
-  for (let attempt=0; attempt<7; attempt++){
-    const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, currentWidth / bitmap.width);
-    const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale);
+  // Pega as dimensões originais de um jeito leve (só o cabeçalho da imagem, não decodifica tudo).
+  const dims = await new Promise((resolve, reject)=>{
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = ()=>{ resolve({ w: img.naturalWidth, h: img.naturalHeight }); URL.revokeObjectURL(url); };
+    img.onerror = (e)=>{ URL.revokeObjectURL(url); reject(new Error('Não consegui ler as dimensões da imagem.')); };
+    img.src = url;
+  });
+
+  let currentQuality = quality, currentWidth = Math.min(maxWidth, dims.w), blob;
+  for (let attempt=0; attempt<6; attempt++){
+    const scale = currentWidth / dims.w;
+    const w = Math.max(1, Math.round(dims.w * scale)), h = Math.max(1, Math.round(dims.h * scale));
+    let bitmap;
+    try{
+      // resizeWidth/resizeHeight deixam o navegador já decodificar no tamanho menor — evita
+      // precisar materializar a foto inteira em resolução máxima na memória (isso é o que
+      // estava travando em celulares com pouca RAM).
+      bitmap = await createImageBitmap(file, { resizeWidth: w, resizeHeight: h, resizeQuality: 'medium' });
+    }catch(e){
+      bitmap = await createImageBitmap(file); // navegador não suporta as opções de resize — cai pro modo simples
+    }
     const canvas = document.createElement('canvas');
     canvas.width = w; canvas.height = h;
     canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
-    bitmap.close(); // libera a memória da imagem decodificada imediatamente (importante em celulares com pouca RAM)
+    bitmap.close(); // libera a memória da imagem decodificada imediatamente
     blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', currentQuality));
     canvas.width = 0; canvas.height = 0; // libera o buffer do canvas também
-    if (blob.size <= TARGET_BYTES || attempt === 6) break;
-    currentQuality = Math.max(0.4, currentQuality - 0.1);
-    currentWidth = Math.max(900, currentWidth - 250);
+    if (blob.size <= TARGET_BYTES || attempt === 5) break;
+    currentQuality = Math.max(0.4, currentQuality - 0.15);
+    currentWidth = Math.max(800, Math.round(currentWidth * 0.75));
   }
   return new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' });
 }
